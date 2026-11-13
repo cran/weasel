@@ -1,0 +1,348 @@
+# selection diagnostics: tolerance sensitivity and attrition selectivity
+
+#' Sweep selection tolerances and count retained respondents
+#'
+#' Evaluates every combination of the supplied tolerance values against
+#' the per-respondent metrics stored in a plan, reporting how many
+#' respondents each combination would retain. Because the sweep reuses
+#' the metrics that [weasel_plan()] already computed, it is fast even
+#' for large panels and works when the plan was created with
+#' `keep_data = FALSE`. Use it to show how sensitive the sample size is
+#' to the chosen tolerances before committing to a scenario.
+#'
+#' @param plan_obj Object returned by [weasel_plan()].
+#' @param require_endpoints Logical values to evaluate. Must be actual
+#'   logical `TRUE`/`FALSE` values; numeric or character stand-ins
+#'   (for example `2` or `"TRUE"`) are rejected rather than coerced.
+#' @param max_missing Integer tolerances for missing waves in the span.
+#' @param n_gap_max Integer tolerances for the number of interior gaps.
+#' @param max_gap_len Integer tolerances for the longest interior gap.
+#' @param max_gap_max Deprecated alias for `max_gap_len` (classed
+#'   warning `weasel_deprecated`); ignored when `max_gap_len` is
+#'   supplied explicitly.
+#'
+#' @details
+#' Tolerance vectors must be nonempty and numeric, with finite, non-negative
+#' values within `1e-8` of integers from 0 to 2147483647. Accepted values are
+#' rounded, sorted and deduplicated. `Inf` is rejected here; scenario tables
+#' supplied to [weasel_plan()] separately support unlimited tolerances.
+#'
+#' @return A data frame with one row per combination and the columns
+#'   `require_endpoints`, `max_missing`, `n_gap_max`, `max_gap_len`,
+#'   `n_ids`, `prop_ids` (share of all respondents observed in the
+#'   span), and `mean_prop_present` (coverage among the retained
+#'   respondents; `NA` when nobody is retained).
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 150, n_times = 10, seed = 1)
+#' p <- weasel_plan(d, "id", "time", span = "core")
+#' sens <- weasel_sensitivity(p, max_missing = 0:2)
+#' weasel_print_table(sens, title = "Tolerance sweep", n = 12)
+#'
+#' @export
+weasel_sensitivity <- function(plan_obj,
+                               require_endpoints = c(TRUE, FALSE),
+                               max_missing = 0:3,
+                               n_gap_max = 0:2,
+                               max_gap_len = 0:2,
+                               max_gap_max = NULL) {
+  .weasel_check_plan(plan_obj)
+  idm <- plan_obj$id_metrics
+  if (!is.data.frame(idm) || nrow(idm) == 0) {
+    .weasel_stop("plan_obj$id_metrics is missing or empty.")
+  }
+  if (!is.null(max_gap_max)) {
+    .weasel_deprecate_arg("max_gap_max", "max_gap_len")
+    if (missing(max_gap_len)) max_gap_len <- max_gap_max
+  }
+
+  # actual logical values only: as.logical() would let arbitrary
+  # nonzero numerics (or "TRUE" strings) silently become endpoint
+  # requirements, changing which respondents a sweep row counts
+  if (!is.logical(require_endpoints) || length(require_endpoints) == 0 ||
+      anyNA(require_endpoints)) {
+    .weasel_stop("require_endpoints must contain only actual logical ",
+                 "values (TRUE and/or FALSE); numeric or character ",
+                 "stand-ins are not coerced.")
+  }
+  require_endpoints <- unique(require_endpoints)
+  check_tol <- function(x, name) {
+    ok <- is.numeric(x) && length(x) > 0 && !anyNA(x) &&
+      all(is.finite(x)) && all(abs(x - round(x)) <= 1e-8) && all(x >= 0)
+    if (!ok) {
+      .weasel_stop(name, " must be non-negative integers ",
+                   "(fractional values are rejected, not truncated).")
+    }
+    rounded <- round(x)
+    if (any(rounded > .Machine$integer.max)) {
+      .weasel_stop(name, " must contain values between 0 and ",
+                   .Machine$integer.max, ".")
+    }
+    sort(unique(as.integer(rounded)))
+  }
+  max_missing <- check_tol(max_missing, "max_missing")
+  n_gap_max   <- check_tol(n_gap_max, "n_gap_max")
+  max_gap_len <- check_tol(max_gap_len, "max_gap_len")
+
+  g <- expand.grid(
+    max_gap_len       = max_gap_len,
+    n_gap_max         = n_gap_max,
+    max_missing       = max_missing,
+    require_endpoints = require_endpoints,
+    KEEP.OUT.ATTRS    = FALSE
+  )
+  g <- g[c("require_endpoints", "max_missing", "n_gap_max", "max_gap_len")]
+  g <- g[order(!g$require_endpoints, g$max_missing, g$n_gap_max,
+               g$max_gap_len), , drop = FALSE]
+  rownames(g) <- NULL
+
+  n_total  <- nrow(idm)
+  anchored <- idm$has_lower & idm$has_upper
+  res <- vapply(seq_len(nrow(g)), function(i) {
+    keep <- idm$n_missing <= g$max_missing[i] &
+      idm$n_gap <= g$n_gap_max[i] &
+      idm$max_gap <= g$max_gap_len[i]
+    if (g$require_endpoints[i]) keep <- keep & anchored
+    c(
+      n   = sum(keep),
+      cov = if (any(keep)) mean(idm$prop_present[keep]) else NA_real_
+    )
+  }, numeric(2))
+
+  g$n_ids             <- as.integer(res["n", ])
+  g$prop_ids          <- g$n_ids / n_total
+  g$mean_prop_present <- res["cov", ]
+  g
+}
+
+# pair groups are dense and increasing in normalized id/wave order
+.weasel_pair_mean <- function(x, grp) {
+  x       <- as.numeric(x)
+  missing <- is.na(x)
+  sums    <- rowsum(ifelse(missing, 0, x), grp)
+  cnts    <- rowsum(as.numeric(!missing), grp)
+  m       <- as.numeric(sums / cnts)
+  m[cnts == 0] <- NA_real_
+
+  # identical finite copies retain their value, even if their sum overflows
+  observed <- !missing
+  if (any(observed)) {
+    values <- x[observed]
+    groups <- grp[observed]
+    common <- values[match(seq_along(m), groups)]
+    different <- !is.finite(values) | values != common[groups]
+    constant <- is.finite(common) &
+      tabulate(groups[different], nbins = length(m)) == 0L
+    common[!is.na(common) & common == 0] <- 0
+    m[constant] <- common[constant]
+  }
+  m
+}
+
+#' Compare retained and excluded respondents on covariates
+#'
+#' Selecting respondents by participation completeness can bias a sample
+#' when retention is related to substantive characteristics. This
+#' diagnostic compares the respondents a scenario retains with those who
+#' are observed in the span but excluded, covariate by covariate, and
+#' reports the standardized mean difference (SMD) for each.
+#'
+#' For each respondent, `at = "first"` uses the covariate value at their
+#' first observed wave inside the span. A missing item at that wave
+#' remains missing; the diagnostic does not search later waves for a
+#' non-missing value. First observed waves may differ between
+#' respondents, so this need not compare a common baseline.
+#'
+#' With `at = "mean"`, the respondent summary averages non-missing
+#' covariate values over their observed waves in the span. Respondents
+#' can contribute different sets of waves. If a covariate changes over
+#' time, differing observation times can contribute to differences
+#' under either summary.
+#'
+#' Duplicated (id, wave) rows trigger a classed warning
+#' (`weasel_duplicates`). Non-missing covariate values are averaged
+#' within each pair first, so duplicate physical rows do not add wave
+#' weight. Respondents with missing summaries are omitted separately
+#' for each covariate; the reported group counts therefore need not
+#' equal the scenario's total respondent counts.
+#'
+#' The SMD divides the retained-minus-excluded mean difference by
+#' `sqrt((sd_retained^2 + sd_excluded^2) / 2)`, using the two group
+#' sample standard deviations. It is `NA` when either group has fewer
+#' than two non-missing respondent summaries, or when this denominator
+#' is zero or `NA`. One constant group can yield a finite SMD when
+#' the other group varies.
+#'
+#' Absolute SMD values around 0.1 are a descriptive balance heuristic
+#' whose interpretation depends on context and covariate importance.
+#' The diagnostic describes observed mean imbalance; small SMDs do not
+#' establish similar distributions, an attrition mechanism, ignorable
+#' attrition or unbiased inference.
+#'
+#' @param plan_obj Object returned by [weasel_plan()].
+#' @param scenario Name (or unambiguous abbreviation) of the scenario.
+#' @param vars Character vector of covariate columns to compare.
+#'   Defaults to every numeric or logical column except the id and wave
+#'   columns.
+#' @param data Optional long-format data frame; defaults to the data
+#'   attached to `plan_obj`. Required when the plan was created with
+#'   `keep_data = FALSE`. Explicitly supplied data are checked against
+#'   the plan's structural fingerprint (classed warning
+#'   `weasel_data_mismatch` on mismatch).
+#' @param at Either `"first"` (value at the first observed wave in the
+#'   span) or `"mean"` (mean over observed waves in the span).
+#'
+#' @return A data frame with one row per covariate and the columns
+#'   `variable`, `n_retained`, `n_excluded` (respondents with a
+#'   non-`NA` value), `mean_retained`, `mean_excluded`, `diff`
+#'   (retained minus excluded), and `smd`, sorted by absolute SMD,
+#'   largest first.
+#'
+#' @references
+#' Austin, P. C. (2009). Balance diagnostics for comparing the distribution
+#' of baseline covariates between treatment groups in propensity-score
+#' matched samples. \doi{10.1002/sim.3697}.
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 200, n_times = 10, seed = 1)
+#' p <- weasel_plan(d, "id", "time", span = "core")
+#' sel <- weasel_selectivity(p, "anchored_balanced")
+#' weasel_print_table(sel, title = "Retained vs excluded", digits = 3)
+#'
+#' @export
+weasel_selectivity <- function(plan_obj, scenario, vars = NULL, data = NULL,
+                               at = c("first", "mean")) {
+  at <- match.arg(at)
+  .weasel_check_plan(plan_obj)
+
+  scenario <- weasel_match_scenario(scenario, plan_obj$plan$scenario)
+  row <- plan_obj$plan[plan_obj$plan$scenario == scenario, , drop = FALSE]
+  if (nrow(row) != 1) {
+    .weasel_stop("scenario not found or ambiguous.",
+                 class = "weasel_error_scenario")
+  }
+
+  user_data <- !is.null(data)
+  if (is.null(data)) data <- attr(plan_obj, "data")
+  if (is.null(data)) {
+    .weasel_stop("no data available: the plan was created with ",
+                 "keep_data = FALSE; pass the original data via the ",
+                 "'data' argument.")
+  }
+  id   <- plan_obj$id
+  wave <- plan_obj$wave
+  .weasel_check_id_wave(data, id, wave)
+  if (user_data) .weasel_check_fingerprint(plan_obj, data, id, wave)
+
+  ids_keep <- row$ids[[1]]
+  if (length(ids_keep) == 0) {
+    .weasel_stop("scenario '", scenario, "' retains no respondents.")
+  }
+  sp <- .weasel_plan_span(plan_obj, row)
+
+  all_ids  <- plan_obj$id_metrics[[id]]
+  excluded <- setdiff(all_ids, ids_keep)
+  if (length(excluded) == 0) {
+    .weasel_stop("scenario '", scenario, "' retains every respondent in ",
+                 "the span; there is no excluded group to compare against.")
+  }
+
+  numish <- vapply(data, function(z) is.numeric(z) || is.logical(z),
+                   logical(1))
+  if (is.null(vars)) {
+    vars <- setdiff(names(data)[numish], c(id, wave))
+  } else {
+    vars <- as.character(vars)
+    missing_v <- setdiff(vars, names(data))
+    if (length(missing_v) > 0) {
+      .weasel_stop("vars not found in data: ",
+                   paste(missing_v, collapse = ", "))
+    }
+    bad <- vars[!numish[vars]]
+    if (length(bad) > 0) {
+      .weasel_stop("vars must be numeric or logical columns; not: ",
+                   paste(bad, collapse = ", "))
+    }
+    vars <- setdiff(vars, c(id, wave))
+  }
+  if (length(vars) == 0) .weasel_stop("no numeric covariates to compare.")
+
+  w_int <- as.integer(round(data[[wave]]))
+  sub <- data[!is.na(data[[id]]) & (w_int %in% sp), , drop = FALSE]
+
+  # duplicated (id, wave) rows would make the baseline depend on the
+  # input row order (at = "first") or be double-counted (at = "mean");
+  # average covariates within each duplicated pair so the diagnostic is
+  # deterministic and counts each pair once, mirroring the plan metrics
+  sub <- sub[c(id, wave, vars)]
+  w_key <- as.integer(round(sub[[wave]]))
+  dd <- .weasel_dedup_index(sub[[id]], w_key)
+  if (dd$n_dup > 0) {
+    .weasel_warn(
+      dd$n_dup, " duplicated (", id, ", ", wave, ") row(s) in the span; ",
+      "covariate values are averaged within each duplicated pair so the ",
+      "diagnostic is deterministic and counts each pair once.",
+      class = "weasel_duplicates"
+    )
+    o     <- order(sub[[id]], w_key)
+    ids_o <- sub[[id]][o]
+    w_o   <- w_key[o]
+    n_o   <- length(o)
+    new_pair <- c(TRUE, ids_o[-1L] != ids_o[-n_o] | w_o[-1L] != w_o[-n_o])
+    grp   <- cumsum(new_pair)
+    agg <- data.frame(ids_o[new_pair], w_o[new_pair],
+                      stringsAsFactors = FALSE)
+    names(agg) <- c(id, wave)
+    for (v in vars) {
+      agg[[v]] <- .weasel_pair_mean(sub[[v]][o], grp)
+    }
+    sub <- agg
+  }
+
+  # one baseline value per respondent per covariate
+  if (at == "first") {
+    o     <- order(sub[[id]], as.integer(round(sub[[wave]])))
+    sub_o <- sub[o, , drop = FALSE]
+    base  <- sub_o[!duplicated(sub_o[[id]]), c(id, vars), drop = FALSE]
+  } else {
+    uid <- sort(unique(sub[[id]]))
+    gi  <- match(sub[[id]], uid)
+    base <- data.frame(uid, stringsAsFactors = FALSE)
+    names(base) <- id
+    for (v in vars) {
+      x <- as.numeric(sub[[v]])
+      m <- vapply(split(x, gi), function(z) {
+        z <- z[!is.na(z)]
+        if (length(z) == 0) NA_real_ else mean(z)
+      }, numeric(1))
+      base[[v]] <- unname(m)
+    }
+  }
+
+  retained_flag <- base[[id]] %in% ids_keep
+
+  smd_row <- function(v) {
+    x1 <- as.numeric(base[[v]][retained_flag])
+    x0 <- as.numeric(base[[v]][!retained_flag])
+    x1 <- x1[!is.na(x1)]
+    x0 <- x0[!is.na(x0)]
+    m1 <- if (length(x1) > 0) mean(x1) else NA_real_
+    m0 <- if (length(x0) > 0) mean(x0) else NA_real_
+    s1 <- if (length(x1) > 1) stats::sd(x1) else NA_real_
+    s0 <- if (length(x0) > 1) stats::sd(x0) else NA_real_
+    pooled <- sqrt((s1^2 + s0^2) / 2)
+    smd <- if (is.na(pooled) || pooled == 0) NA_real_ else (m1 - m0) / pooled
+    data.frame(
+      variable = v,
+      n_retained = length(x1), n_excluded = length(x0),
+      mean_retained = m1, mean_excluded = m0,
+      diff = m1 - m0, smd = smd,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  out <- do.call(rbind, lapply(vars, smd_row))
+  out <- out[order(-abs(out$smd), out$variable), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}

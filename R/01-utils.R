@@ -1,0 +1,694 @@
+# internal utility helpers and package state
+# none of these are exported; helpers are prefixed with .weasel_
+
+# package-internal state container (replaces the former global weasel_env)
+the <- new.env(parent = emptyenv())
+
+# classed error so callers can handle weasel failures programmatically,
+# e.g. tryCatch(..., weasel_error = function(e) ...)
+.weasel_stop <- function(..., class = NULL) {
+  stop(errorCondition(paste0(...), class = c(class, "weasel_error"),
+                      call = NULL))
+}
+
+# classed warning; always a real warning condition so behaviour does not
+# depend on which optional packages are installed
+.weasel_warn <- function(..., class = NULL) {
+  warning(warningCondition(paste0(...), class = c(class, "weasel_warning"),
+                           call = NULL))
+}
+
+# deprecation warning used by the renamed and legacy functions
+.weasel_deprecate <- function(old, new) {
+  .weasel_warn(old, "() is deprecated; use ", new, "() instead.",
+               class = "weasel_deprecated")
+}
+
+# deprecation warning for renamed arguments and table columns
+.weasel_deprecate_arg <- function(old, new, what = "argument") {
+  .weasel_warn(what, " '", old, "' is deprecated; use '", new,
+               "' instead.", class = "weasel_deprecated")
+}
+
+.weasel_is_installed <- function(pkg) requireNamespace(pkg, quietly = TRUE)
+
+.weasel_cli <- function() .weasel_is_installed("cli")
+
+.weasel_verbose <- function() isTRUE(getOption("weasel.verbose", TRUE))
+
+.weasel_msg <- function(...) {
+  if (!.weasel_verbose()) return(invisible(NULL))
+  message(paste0(...))
+  invisible(NULL)
+}
+
+.weasel_ok <- function(...) {
+  if (!.weasel_verbose()) return(invisible(NULL))
+  text <- paste0(...)
+  if (.weasel_cli()) {
+    cli::cli_alert_success("{text}")
+  } else {
+    message(paste0("ok: ", text))
+  }
+  invisible(NULL)
+}
+
+.weasel_h2 <- function(text) {
+  if (!.weasel_verbose()) return(invisible(NULL))
+  if (.weasel_cli()) {
+    message(cli::rule(left = text))
+  } else {
+    w <- max(getOption("width", 72L), nchar(text) + 6L)
+    dashes <- paste(rep("-", max(w - nchar(text) - 3L, 3L)), collapse = "")
+    message(paste0("- ", text, " ", dashes))
+  }
+  invisible(NULL)
+}
+
+# null-default helper
+.weasel_or <- function(a, b) if (is.null(a)) b else a
+
+# integer sequence that never counts downwards: a > b yields integer(0)
+.weasel_seq_int <- function(a, b) {
+  a <- as.integer(a)
+  b <- as.integer(b)
+  if (is.na(a) || is.na(b) || a > b) integer(0) else seq.int(a, b)
+}
+
+.weasel_unique_int <- function(x) sort(unique(as.integer(x[!is.na(x)])))
+
+# single non-negative integer or NULL; strict: fractional values are
+# rejected rather than silently truncated
+.weasel_check_count <- function(x, name) {
+  if (is.null(x)) return(NULL)
+  ok <- length(x) == 1 && is.numeric(x) && !is.na(x) && is.finite(x) &&
+    abs(x - round(x)) <= 1e-8 && x >= 0
+  if (!ok) {
+    .weasel_stop(name, " must be a single non-negative integer ",
+                 "(fractional values are rejected, not truncated).")
+  }
+  rounded <- round(x)
+  if (rounded > .Machine$integer.max) {
+    .weasel_stop(name, " must be between 0 and ", .Machine$integer.max, ".")
+  }
+  as.integer(rounded)
+}
+
+# single probability in [0, 1]; the scalar sibling of
+# .weasel_check_count: exactly one finite numeric value, no NA, and the
+# error names the parameter and its required range
+.weasel_check_prob <- function(x, name) {
+  ok <- length(x) == 1 && is.numeric(x) && !is.na(x) && is.finite(x) &&
+    x >= 0 && x <= 1
+  if (!ok) {
+    .weasel_stop(name, " must be a single number in [0, 1].")
+  }
+  as.numeric(x)
+}
+
+# single integer bound (any sign) or NULL; strict: fractional values
+# are rejected rather than silently rounded
+.weasel_check_bound <- function(x, name) {
+  if (is.null(x)) return(NULL)
+  ok <- length(x) == 1 && is.numeric(x) && !is.na(x) && is.finite(x) &&
+    abs(x - round(x)) <= 1e-8
+  if (!ok) {
+    .weasel_stop(name, " must be a single integer-valued number ",
+                 "(fractional values are rejected, not rounded).")
+  }
+  rounded <- round(x)
+  if (rounded < -.Machine$integer.max || rounded > .Machine$integer.max) {
+    .weasel_stop(name, " must be between ", -.Machine$integer.max,
+                 " and ", .Machine$integer.max, ".")
+  }
+  as.integer(rounded)
+}
+
+# validate a wave column: must be numeric and integer-valued
+# returns the sorted unique integer waves
+.weasel_check_wave <- function(x, name = "wave") {
+  if (is.factor(x)) {
+    .weasel_stop(
+      "column '", name, "' is a factor; convert it first, e.g. ",
+      "as.integer(as.character(data$", name, "))."
+    )
+  }
+  if (!is.numeric(x)) {
+    .weasel_stop("column '", name, "' must be numeric (integer wave numbers).")
+  }
+  ok <- x[!is.na(x)]
+  if (length(ok) == 0) .weasel_stop("column '", name, "' has no non-missing values.")
+  if (any(!is.finite(ok))) {
+    .weasel_stop("column '", name, "' must contain finite wave numbers.")
+  }
+  rounded <- round(ok)
+  if (any(abs(ok - rounded) > 1e-8)) {
+    .weasel_stop("column '", name, "' must contain integer-valued wave numbers.")
+  }
+  # the most negative integer is reserved for NA, so usable limits are symmetric
+  if (any(rounded < -.Machine$integer.max | rounded > .Machine$integer.max)) {
+    .weasel_stop("column '", name, "' must contain wave numbers between ",
+                 -.Machine$integer.max, " and ", .Machine$integer.max, ".")
+  }
+  sort(unique(as.integer(rounded)))
+}
+
+# shared entry validation for both pipelines
+.weasel_check_id_wave <- function(data, id, wave) {
+  if (!is.data.frame(data)) .weasel_stop("data must be a data.frame.")
+  if (!is.character(id) || length(id) != 1) .weasel_stop("id must be a single string.")
+  if (!is.character(wave) || length(wave) != 1) .weasel_stop("wave must be a single string.")
+  if (identical(id, wave)) {
+    .weasel_stop("id and wave must be different columns (both are '",
+                 id, "').")
+  }
+  if (!(id %in% names(data))) .weasel_stop("id column not found: ", id)
+  if (!(wave %in% names(data))) .weasel_stop("wave column not found: ", wave)
+  if (is.list(data[[id]])) .weasel_stop("id column must be an atomic vector.")
+  invisible(.weasel_check_wave(data[[wave]], wave))
+}
+
+# one-line account of rows excluded from participation analysis, so no
+# observation disappears silently; verbose-gated like all status text
+.weasel_report_dropped <- function(data, id, wave, span) {
+  na_id   <- sum(is.na(data[[id]]))
+  na_wave <- sum(!is.na(data[[id]]) & is.na(data[[wave]]))
+  w <- suppressWarnings(as.integer(round(as.numeric(data[[wave]]))))
+  out_span <- sum(!is.na(data[[id]]) & !is.na(w) & !(w %in% span))
+  if (na_id + na_wave + out_span > 0) {
+    .weasel_msg(
+      "rows not used for participation: ", na_id, " with missing ", id,
+      ", ", na_wave, " with missing ", wave, ", ", out_span,
+      " outside span ", span[1], ":", span[length(span)], "."
+    )
+  }
+  invisible(c(na_id = na_id, na_wave = na_wave, out_of_span = out_span))
+}
+
+# warn when a returned long-format subset still contains duplicated
+# (id, wave) rows: participation metrics count each pair once, but
+# output rows are returned as-is
+.weasel_warn_output_duplicates <- function(out, id, wave) {
+  if (nrow(out) == 0) return(invisible(0L))
+  dd <- .weasel_dedup_index(out[[id]],
+                            as.integer(round(as.numeric(out[[wave]]))))
+  if (dd$n_dup > 0) {
+    .weasel_warn(
+      dd$n_dup, " duplicated (", id, ", ", wave, ") row(s) in the ",
+      "returned data. selection metrics counted each pair once, but ",
+      "output rows are not deduplicated; resolve duplicates before ",
+      "modelling, e.g. df[!duplicated(df[c(\"", id, "\", \"", wave,
+      "\")]), ].",
+      class = "weasel_duplicates"
+    )
+  }
+  invisible(dd$n_dup)
+}
+
+# sorted index of the unique (id, wave) pairs plus the duplicate count;
+# a single order() pass, much faster on large panels than the
+# paste-based unique()/duplicated() methods for data frames
+.weasel_dedup_index <- function(id_vec, wave_vec) {
+  o <- order(id_vec, wave_vec)
+  n <- length(o)
+  if (n <= 1L) return(list(idx = o, n_dup = 0L))
+  a <- id_vec[o]
+  b <- wave_vec[o]
+  dup <- c(FALSE, a[-1L] == a[-n] & b[-1L] == b[-n])
+  list(idx = o[!dup], n_dup = as.integer(sum(dup, na.rm = TRUE)))
+}
+
+# prepare participation from validated data and an already resolved grid;
+# preserve id types and levels, count each rounded pair once, and leave
+# reporting and empty-span handling to the caller
+.weasel_prepare_participation <- function(data, id_col, wave_col, span) {
+  ok    <- !is.na(data[[id_col]]) & !is.na(data[[wave_col]])
+  ids0  <- data[[id_col]][ok]
+  w0    <- as.integer(round(data[[wave_col]][ok]))
+  in_sp <- w0 %in% span
+  ids_v <- ids0[in_sp]
+  w_v   <- w0[in_sp]
+
+  dd    <- .weasel_dedup_index(ids_v, w_v)
+  ids_v <- ids_v[dd$idx]
+  w_v   <- w_v[dd$idx]
+
+  list(ids = ids_v, waves = w_v, positions = match(w_v, span),
+       n_dup = dd$n_dup)
+}
+
+# warn about duplicated (id, wave) rows; duplicates usually indicate a
+# join or merge problem, and both pipelines count each pair once
+.weasel_warn_duplicates <- function(n_dup, id, wave) {
+  if (n_dup > 0) {
+    .weasel_warn(
+      n_dup, " duplicated (", id, ", ", wave, ") row(s) found; each pair ",
+      "is counted once. duplicates often indicate a join or merge ",
+      "problem worth checking.",
+      class = "weasel_duplicates"
+    )
+  }
+  invisible(n_dup)
+}
+
+.weasel_check_duplicates <- function(data, id, wave) {
+  # accepted near-integer waves denote the same participation pair
+  dd <- .weasel_dedup_index(data[[id]], round(data[[wave]]))
+  .weasel_warn_duplicates(dd$n_dup, id, wave)
+}
+
+# resolve the wave grid over which presence is evaluated:
+# "consecutive" treats every integer in lower:upper as a scheduled wave;
+# "observed" uses only wave values that occur anywhere in the data,
+# which suits biennial and other non-consecutive schedules
+.weasel_grid_waves <- function(observed_waves, lower, upper, grid) {
+  span <- if (grid == "observed") {
+    observed_waves[observed_waves >= lower & observed_waves <= upper]
+  } else {
+    .weasel_seq_int(lower, upper)
+  }
+  if (length(span) == 0) .weasel_stop("the selected span contains no waves.")
+  span
+}
+
+# warn when a consecutive span contains waves that no respondent has:
+# every such wave counts as missed by everyone, which usually means the
+# schedule is non-consecutive and grid = "observed" is the right choice
+.weasel_warn_empty_span <- function(span, observed_waves) {
+  empty <- setdiff(span, observed_waves)
+  if (length(empty) == 0) return(invisible(0L))
+  shown <- paste(utils::head(empty, 5), collapse = ", ")
+  if (length(empty) > 5) shown <- paste0(shown, ", ...")
+  .weasel_warn(
+    length(empty), " of ", length(span), " wave(s) in the span ",
+    span[1], ":", span[length(span)],
+    " have no observations for any respondent (", shown, "); they count ",
+    "as missed by everyone. if waves are non-consecutive by design ",
+    "(e.g. biennial), use grid = \"observed\".",
+    class = "weasel_empty_waves"
+  )
+  invisible(length(empty))
+}
+
+# validate a custom scenario table for weasel_plan()
+.weasel_check_scenarios <- function(scenarios) {
+  required <- c("scenario", "require_endpoints", "max_missing",
+                "n_gap_max", "max_gap_len")
+  if (!is.data.frame(scenarios)) .weasel_stop("scenarios must be a data.frame.")
+  if (!("max_gap_len" %in% names(scenarios)) &&
+      "max_gap_max" %in% names(scenarios)) {
+    .weasel_deprecate_arg("max_gap_max", "max_gap_len",
+                          what = "scenario column")
+    names(scenarios)[names(scenarios) == "max_gap_max"] <- "max_gap_len"
+  }
+  missing_cols <- setdiff(required, names(scenarios))
+  if (length(missing_cols) > 0) {
+    .weasel_stop("scenarios is missing required column(s): ",
+                 paste(missing_cols, collapse = ", "))
+  }
+  if (nrow(scenarios) == 0) .weasel_stop("scenarios must have at least one row.")
+  s <- scenarios[required]
+  s$scenario <- as.character(s$scenario)
+  if (anyNA(s$scenario) || any(!nzchar(s$scenario))) {
+    .weasel_stop("scenario names must be non-empty strings.")
+  }
+  if (anyDuplicated(s$scenario)) .weasel_stop("scenario names must be unique.")
+  s$require_endpoints <- .weasel_check_endpoint_flags(
+    s$require_endpoints, "scenario column 'require_endpoints'"
+  )
+  for (nm in c("max_missing", "n_gap_max", "max_gap_len")) {
+    raw <- s[[nm]]
+    # factors convert through their displayed labels, never through
+    # their internal level codes: factor("0", "1") means thresholds 0
+    # and 1, not 1 and 2
+    if (is.factor(raw)) raw <- as.character(raw)
+    if (anyNA(raw)) {
+      .weasel_stop("scenario column '", nm, "' must not contain NA.")
+    }
+    val <- suppressWarnings(as.numeric(raw))
+    bad <- is.na(val)
+    if (any(bad)) {
+      .weasel_stop("scenario column '", nm, "' contains value(s) not ",
+                   "interpretable as numbers: ",
+                   paste(unique(as.character(raw)[bad]), collapse = ", "),
+                   ". tolerances must be integer-valued numbers or Inf.")
+    }
+    if (any(val < 0)) .weasel_stop("scenario column '", nm, "' must be >= 0.")
+    frac <- is.finite(val) & abs(val - round(val)) > 1e-8
+    if (any(frac)) {
+      .weasel_stop("scenario column '", nm, "' must contain integer-valued ",
+                   "tolerances or Inf (fractional values are rejected, ",
+                   "not truncated).")
+    }
+    s[[nm]] <- val
+  }
+  s
+}
+
+# strict endpoint-flag normalization shared by scenario tables: actual
+# logical values pass through; imported character or factor labels
+# "TRUE"/"FALSE"/"T"/"F" and exact numeric 0/1 are accepted so that
+# tables read from files keep working; everything else (2, "yes", "",
+# NA) is rejected instead of being coerced through as.logical()
+.weasel_check_endpoint_flags <- function(x, name = "require_endpoints") {
+  raw <- x
+  if (is.factor(raw)) raw <- as.character(raw)
+  out <- rep(NA, length(raw))
+  if (is.logical(raw)) {
+    out <- raw
+  } else if (is.character(raw)) {
+    out[!is.na(raw) & raw %in% c("TRUE", "T")]  <- TRUE
+    out[!is.na(raw) & raw %in% c("FALSE", "F")] <- FALSE
+  } else if (is.numeric(raw)) {
+    out[!is.na(raw) & raw == 1] <- TRUE
+    out[!is.na(raw) & raw == 0] <- FALSE
+  }
+  if (length(out) == 0 || anyNA(out)) {
+    offending <- unique(as.character(raw)[is.na(out)])
+    offending <- offending[!is.na(offending)]
+    .weasel_stop(
+      name, " must contain only logical values (TRUE/FALSE; the ",
+      "imported labels \"TRUE\"/\"FALSE\"/\"T\"/\"F\" and the exact ",
+      "numbers 0/1 are also accepted)",
+      if (length(offending) > 0) {
+        paste0("; offending value(s): ", paste(offending, collapse = ", "))
+      } else "",
+      "."
+    )
+  }
+  out
+}
+
+# run-length gap metrics over the full presence vector
+# a gap is any maximal run of FALSE, including leading/trailing runs
+# (reference implementation; the pipelines use .weasel_gap_metrics)
+.weasel_rle_gaps <- function(present_logical) {
+  if (length(present_logical) == 0) {
+    return(list(n_gap = 0L, max_gap = 0L, n_present = 0L))
+  }
+  miss <- !present_logical
+  r <- rle(miss)
+  n_gap <- sum(r$values)
+  max_gap <- if (any(r$values)) max(r$lengths[r$values]) else 0L
+  list(
+    n_gap     = as.integer(n_gap),
+    max_gap   = as.integer(max_gap),
+    n_present = as.integer(sum(present_logical))
+  )
+}
+
+# interior gap metrics: runs of FALSE strictly between the first and last
+# TRUE; leading/trailing absence is entry/exit, not a gap
+# (reference implementation; the pipelines use .weasel_gap_metrics)
+.weasel_interior_gaps <- function(present_logical) {
+  n_present <- as.integer(sum(present_logical))
+  if (n_present == 0L) {
+    return(list(n_gap = 0L, max_gap = 0L, n_present = 0L))
+  }
+  idx <- which(present_logical)
+  core <- present_logical[idx[1]:idx[length(idx)]]
+  g <- .weasel_rle_gaps(core)
+  list(n_gap = g$n_gap, max_gap = g$max_gap, n_present = n_present)
+}
+
+# vectorized per-respondent presence metrics from long-format positions;
+# equivalent to applying .weasel_interior_gaps row by row, but a single
+# ordered pass over the observations instead of one rle() per respondent
+# id_vec:  respondent id per deduplicated observation (any atomic type)
+# pos_vec: integer grid position in 1..L
+# returns one row per id, ids sorted ascending
+.weasel_gap_metrics <- function(id_vec, pos_vec, L) {
+  if (length(id_vec) == 0) {
+    return(data.frame(
+      id = id_vec, n_present = integer(0),
+      has_lower = logical(0), has_upper = logical(0),
+      n_gap = integer(0), max_gap = integer(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  o     <- order(id_vec, pos_vec)
+  ids_o <- id_vec[o]
+  pos_o <- pos_vec[o]
+
+  new_id <- c(TRUE, ids_o[-1L] != ids_o[-length(ids_o)])
+  grp    <- cumsum(new_id)
+  n_ids  <- grp[length(grp)]
+
+  n_present <- tabulate(grp, nbins = n_ids)
+  has_lower <- tabulate(grp[pos_o == 1L], nbins = n_ids) > 0L
+  has_upper <- tabulate(grp[pos_o == L],  nbins = n_ids) > 0L
+
+  n_gap   <- integer(n_ids)
+  max_gap <- integer(n_ids)
+  if (length(pos_o) > 1L) {
+    gap_len <- diff(pos_o) - 1L
+    gap_len[new_id[-1L]] <- 0L
+    idx <- which(gap_len > 0L)
+    if (length(idx) > 0L) {
+      g_grp <- grp[-1L][idx]
+      g_val <- gap_len[idx]
+      n_gap <- tabulate(g_grp, nbins = n_ids)
+      o2    <- order(g_grp, g_val)
+      last  <- !duplicated(g_grp[o2], fromLast = TRUE)
+      max_gap[g_grp[o2][last]] <- g_val[o2][last]
+    }
+  }
+
+  data.frame(
+    id        = ids_o[new_id],
+    n_present = as.integer(n_present),
+    has_lower = has_lower,
+    has_upper = has_upper,
+    n_gap     = as.integer(n_gap),
+    max_gap   = as.integer(max_gap),
+    stringsAsFactors = FALSE
+  )
+}
+
+# shared validation for plan objects
+.weasel_check_plan <- function(plan_obj) {
+  if (!is.list(plan_obj) || is.null(plan_obj$plan) ||
+      !inherits(plan_obj$plan, "data.frame")) {
+    .weasel_stop("plan_obj must be the output of weasel_plan().",
+                 class = "weasel_error_plan")
+  }
+  if (!("scenario" %in% names(plan_obj$plan))) {
+    .weasel_stop("plan_obj$plan must contain a 'scenario' column.",
+                 class = "weasel_error_plan")
+  }
+  invisible(plan_obj)
+}
+
+# historical v1 stream, preserved for fingerprints without a version;
+# display formatting and unescaped separators have known weaknesses.
+# do not strengthen this route using information an old plan never stored
+.weasel_pair_hash <- function(ids_chr, waves_int) {
+  o <- order(ids_chr, waves_int, method = "radix")
+  stream <- paste0(
+    "weasel-fp-v1\x1e",
+    paste0(enc2utf8(ids_chr[o]), "\x1f", as.character(waves_int[o]),
+           collapse = "\x1e")
+  )
+  f <- tempfile("weasel-fp-")
+  on.exit(unlink(f), add = TRUE)
+  con <- file(f, open = "wb")
+  writeBin(charToRaw(enc2utf8(stream)), con)
+  close(con)
+  unname(tools::md5sum(f))
+}
+
+# exact binary64 keys in portable byte order; R equality treats both
+# signs of zero as the same identifier, including complex components
+.weasel_double_key <- function(x) {
+  x <- as.double(x)
+  if (length(x) == 0L) return(character(0))
+  x[!is.na(x) & x == 0] <- 0
+  bytes <- writeBin(x, raw(), size = 8L, endian = "big")
+  hex <- sprintf("%02x", 0:255)[as.integer(bytes) + 1L]
+  hex <- matrix(hex, nrow = 8L)
+  do.call(paste0, lapply(seq_len(8L), function(i) hex[i, ]))
+}
+
+# ASCII keys retain primitive identity rather than printed labels;
+# factors share character labels, dates/times retain their stored
+# numerical precision, and bytes-marked strings differ from UTF-8 text
+.weasel_id_key <- function(ids) {
+  if (length(ids) == 0L) return(character(0))
+  if (is.factor(ids)) ids <- as.character(ids)
+  if (is.character(ids)) {
+    values <- unique(ids)
+    encoding <- Encoding(values)
+    text <- iconv(values, to = "UTF-8", sub = NA_character_)
+    tags <- rep("c", length(values))
+    tags[encoding == "bytes"] <- "b"
+    # invalid native bytes must not turn into literal display escapes;
+    # in a UTF-8 locale they have the same identity as marked UTF-8
+    tags[is.na(text) & encoding == "unknown" &
+           !l10n_info()[["UTF-8"]]] <- "u"
+    original <- is.na(text) | encoding == "bytes"
+    text[original] <- values[original]
+    hex <- vapply(text, function(x) {
+      paste0(format(charToRaw(x)), collapse = "")
+    }, character(1), USE.NAMES = FALSE)
+    keys <- paste0(tags, hex)
+    return(keys[match(ids, values)])
+  }
+  if (is.logical(ids)) return(paste0("l", as.integer(ids)))
+  if (is.complex(ids)) {
+    return(paste0("z", .weasel_double_key(Re(ids)),
+                  .weasel_double_key(Im(ids))))
+  }
+  paste0("n", .weasel_double_key(ids))
+}
+
+# length-framed exact keys and integer waves, sorted by ASCII key and
+# wave; md5 remains an accidental-drift guard, not authentication
+.weasel_pair_hash_v2 <- function(ids, waves_int) {
+  keys <- .weasel_id_key(ids)
+  o <- order(keys, waves_int, method = "radix")
+  stream <- paste0(
+    "weasel-fp-v2\x1e",
+    if (length(o) == 0L) "" else {
+      paste0(nchar(keys[o], type = "bytes"), ":", keys[o], ":",
+             as.character(waves_int[o]), ";", collapse = "")
+    }
+  )
+  f <- tempfile("weasel-fp-")
+  on.exit(unlink(f), add = TRUE)
+  con <- file(f, open = "wb")
+  writeBin(charToRaw(stream), con)
+  close(con)
+  unname(tools::md5sum(f))
+}
+
+.weasel_fingerprint_version <- function(version) {
+  if (!typeof(version) %in% c("integer", "double") ||
+      length(version) != 1L || !is.null(attributes(version)) ||
+      is.na(version) || !version %in% c(1, 2)) {
+    .weasel_stop(
+      "unsupported fingerprint encoding version; use a supported ",
+      "weasel version or rebuild the plan from verified original data.",
+      class = "weasel_error_fingerprint_version"
+    )
+  }
+  as.integer(version)
+}
+
+# structural fingerprint of a panel, cheap and order-invariant; used to
+# detect when a saved plan is reunited with data it was not built from.
+# retain the exact v1 list for old saved plans; new plans record v2
+.weasel_data_fingerprint <- function(data, id, wave, encoding_version = 2L) {
+  version <- .weasel_fingerprint_version(encoding_version)
+  ok   <- !is.na(data[[id]]) & !is.na(data[[wave]])
+  ids0 <- data[[id]][ok]
+  w0   <- as.integer(round(as.numeric(data[[wave]][ok])))
+  dd   <- .weasel_dedup_index(ids0, w0)
+  idsu <- ids0[dd$idx]
+  wu   <- w0[dd$idx]
+  waves <- sort(unique(wu))
+  fp <- list(
+    n_rows         = nrow(data),
+    n_pairs        = length(wu),
+    n_ids          = length(unique(idsu)),
+    id_type        = class(data[[id]])[1],
+    waves          = waves,
+    pairs_per_wave = as.integer(table(factor(wu, levels = waves))),
+    pair_hash      = if (version == 1L) {
+      .weasel_pair_hash(as.character(idsu), wu)
+    } else {
+      .weasel_pair_hash_v2(idsu, wu)
+    }
+  )
+  if (version == 2L) fp$encoding_version <- 2L
+  fp
+}
+
+# compare the stored fingerprint against explicitly supplied data and
+# warn on a structural mismatch; plans from older versions carry no
+# fingerprint and are accepted silently. exactly the fields the stored
+# fingerprint carries are compared: legacy plans saved before 0.4.1
+# have no pair_hash and keep their documented acceptance behavior,
+# absent version means v1; never migrate a saved fingerprint in place
+.weasel_check_fingerprint <- function(plan_obj, data, id, wave) {
+  fp <- plan_obj[["fingerprint"]]
+  if (is.null(fp)) return(invisible(TRUE))
+  versioned <- "encoding_version" %in% names(fp)
+  version <- if (versioned) fp[["encoding_version"]] else 1L
+  now <- .weasel_data_fingerprint(data, id, wave, encoding_version = version)
+  if (versioned) now$encoding_version <- version
+  now <- now[names(fp)]
+  same <- identical(fp, now)
+  if (!same) {
+    legacy_names <- setdiff(names(fp), "pair_hash")
+    counts_same  <- identical(fp[legacy_names], now[legacy_names])
+    if (counts_same) {
+      # every aggregate count agrees; only the digest differs, so the
+      # participation was reassigned between ids and/or waves
+      .weasel_warn(
+        "the supplied data do not match the data this plan was built ",
+        "from: the aggregate counts agree (rows ", fp$n_rows,
+        ", unique (id, wave) pairs ", fp$n_pairs, ", distinct ids ",
+        fp$n_ids, "), but the deduplicated (id, wave) assignments ",
+        "differ (pair digest mismatch). the plan's scenario id lists ",
+        "were computed on the original data; results on different data ",
+        "may be invalid.",
+        class = "weasel_data_mismatch"
+      )
+    } else {
+      .weasel_warn(
+        "the supplied data do not structurally match the data this plan ",
+        "was built from (rows ", fp$n_rows, " -> ", now$n_rows,
+        ", unique (id, wave) pairs ", fp$n_pairs, " -> ", now$n_pairs,
+        ", distinct ids ", fp$n_ids, " -> ", now$n_ids, "). the plan's ",
+        "scenario id lists were computed on the original data; results ",
+        "on different data may be invalid.",
+        class = "weasel_data_mismatch"
+      )
+    }
+  }
+  invisible(same)
+}
+
+# grid waves of a plan, with a fallback for objects saved by older
+# versions that only stored the bounds; exact [[ ]] indexing is
+# essential here: with $, a missing 'span' partial-matches
+# 'span_reason' and the "full"/"core" label coerces to NA, silently
+# emptying every downstream subset
+.weasel_plan_span <- function(plan_obj, row) {
+  sp <- plan_obj[["span"]]
+  if (!is.null(sp)) return(as.integer(sp))
+  .weasel_seq_int(row$lower[[1]], row$upper[[1]])
+}
+
+.weasel_format_num <- function(x, digits = 3) {
+  if (length(x) == 0) return(character(0))
+  out <- formatC(x, format = "f", digits = digits)
+  out[is.na(x)] <- NA_character_
+  out
+}
+
+.weasel_maybe_round <- function(x, digits = 3) {
+  if (is.numeric(x)) round(x, digits) else x
+}
+
+#' Deprecated functions
+#'
+#' These earlier names are kept so existing scripts keep running, but they
+#' now emit a deprecation warning (class `weasel_deprecated`) and forward
+#' to their replacements. They will be removed in a future release.
+#'
+#' * `reshape_to_wide()` -> [weasel_reshape_to_wide()]
+#' * `summarize_waves()` -> [weasel_summarize_waves()]
+#' * `filter_wave_summary()` -> [weasel_filter_wave_summary()]
+#' * `get_data_by_row()` -> [weasel_get_data_by_row()]
+#' * `logo()` -> [weasel_logo()]
+#' * `generate_sets()` and `filter_sets()` remain no-ops (see
+#'   [evaluate_weasel_scope()]) and now warn as well.
+#'
+#' @param ... Arguments passed on to the replacement function.
+#'
+#' @return The value of the corresponding replacement function.
+#' @name weasel-deprecated
+#' @keywords internal
+NULL

@@ -1,0 +1,655 @@
+# scope-based interactive pipeline
+# state lives in the package-internal environment `the` (see 01-utils.R),
+# never in the user's global environment
+
+#' Set up a weasel scope for wave-pattern analysis
+#'
+#' Initialises the package-internal scope that holds data, column names,
+#' and wave-range parameters used by the downstream pipeline functions.
+#' All arguments are validated immediately, so mistakes fail here rather
+#' than several steps later. The user's global environment is never
+#' modified.
+#'
+#' @param data A data frame in long format. A respondent is considered
+#'   observed at a wave if a row with that (id, wave) pair exists.
+#' @param id Name of the respondent-identifier column. Any atomic type
+#'   (integer, character, ...) is supported.
+#' @param wave Name of the wave/time column. Must be numeric with
+#'   integer-valued entries. Non-missing values must be finite and between
+#'   -2147483647 and 2147483647. Deviations of up to `1e-8` from an integer
+#'   are accepted and rounded for participation and duplicate checks.
+#' @param min_present Single integer from 1 to 2147483647 (default 1);
+#'   respondents with fewer observed waves inside the span are dropped by
+#'   [weasel_reshape_to_wide()]. The default keeps every respondent
+#'   with at least one observed wave, so exploration shows the full
+#'   participation landscape unless you narrow it.
+#' @param max_missing Optional integer from 0 to 2147483647; maximum
+#'   allowed number of missing waves inside the span. `NULL` (default)
+#'   applies no constraint.
+#' @param max_gap_len Optional integer from 0 to 2147483647; maximum
+#'   allowed length of an interior gap (a run of missing waves strictly
+#'   between a respondent's first and last observed wave inside the span).
+#'   `NULL` (default) applies no constraint.
+#' @param n_gap_max Optional integer from 0 to 2147483647; maximum
+#'   allowed number of interior gaps. `NULL` (default) applies no
+#'   constraint.
+#' @param require_endpoints If `TRUE`, only respondents observed at
+#'   both the first and last wave of the span are kept. Default
+#'   `FALSE`.
+#' @param lower Optional lower bound of the wave range; an integer
+#'   between -2147483647 and 2147483647.
+#' @param upper Optional upper bound of the wave range; an integer
+#'   between -2147483647 and 2147483647.
+#' @param size,gap,n_gap Deprecated aliases (classed warning
+#'   `weasel_deprecated`): use `min_present` (for `size`, whose minimum
+#'   is used), `max_gap_len` (for `gap`), and `n_gap_max` (for
+#'   `n_gap`). An explicitly supplied new-name argument takes
+#'   precedence over its alias. When used, `size` must be a nonempty
+#'   numeric vector of finite values at least 1 and within `1e-8` of
+#'   integers. Its rounded minimum must be at most 2147483647; larger
+#'   nonminimum values are allowed.
+#' @param grid How the wave grid inside the span is defined.
+#'   `"consecutive"` (default) treats every integer between `lower` and
+#'   `upper` as a scheduled wave; `"observed"` uses only wave values
+#'   that occur anywhere in the data, which is the right choice for
+#'   biennial and other non-consecutive schedules. With
+#'   `"consecutive"`, [evaluate_weasel_scope()] warns when the span
+#'   contains waves that no respondent has.
+#' @param override If `TRUE`, overwrite any existing scope. If `FALSE`
+#'   and a scope already exists, an error is raised.
+#'
+#' @return The scope environment, invisibly.
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 50, n_times = 8, seed = 1)
+#'
+#' # step 1 of the scope pipeline: bind data and define the wave range
+#' set_weasel_scope(d, "id", "time", upper = 8)
+#'
+#' # only respondents whose interior gaps are at most 1 wave long
+#' set_weasel_scope(d, "id", "time", max_gap_len = 1)
+#'
+#' # biennial schedule: use the observed grid
+#' b <- generate_weasel_dummy_data(n_ids = 30, waves = seq(2008, 2018, 2),
+#'                                 seed = 1)
+#' set_weasel_scope(b, "id", "time", grid = "observed")
+#'
+#' weasel_clear_scope()
+#'
+#' @export
+set_weasel_scope <- function(data,
+                             id,
+                             wave,
+                             min_present = 1L,
+                             max_missing = NULL,
+                             max_gap_len = NULL,
+                             n_gap_max = NULL,
+                             require_endpoints = FALSE,
+                             lower = NULL,
+                             upper = NULL,
+                             grid = c("consecutive", "observed"),
+                             override = TRUE,
+                             size = NULL,
+                             gap = NULL,
+                             n_gap = NULL) {
+  .weasel_check_id_wave(data, id, wave)
+  grid  <- match.arg(grid)
+  lower <- .weasel_check_bound(lower, "lower")
+  upper <- .weasel_check_bound(upper, "upper")
+  if (!is.null(lower) && !is.null(upper) && upper < lower) {
+    .weasel_stop("upper must be >= lower.")
+  }
+
+  # deprecated aliases forward to the harmonized names; an explicitly
+  # supplied new-name argument always wins
+  if (!is.null(size)) {
+    .weasel_deprecate_arg("size", "min_present")
+    if (missing(min_present)) {
+      ok <- is.numeric(size) && length(size) > 0 && !anyNA(size) &&
+        all(is.finite(size)) && all(abs(size - round(size)) <= 1e-8) &&
+        all(size >= 1)
+      if (!ok) {
+        .weasel_stop("size must be a vector of positive integers ",
+                     "(fractional values are rejected, not truncated).")
+      }
+      min_present <- min(round(size))
+    }
+  }
+  if (!is.null(gap)) {
+    .weasel_deprecate_arg("gap", "max_gap_len")
+    if (is.null(max_gap_len)) max_gap_len <- gap
+  }
+  if (!is.null(n_gap)) {
+    .weasel_deprecate_arg("n_gap", "n_gap_max")
+    if (is.null(n_gap_max)) n_gap_max <- n_gap
+  }
+
+  min_present <- .weasel_check_count(min_present, "min_present")
+  if (is.null(min_present) || min_present < 1) {
+    .weasel_stop("min_present must be a single integer >= 1.")
+  }
+  max_missing <- .weasel_check_count(max_missing, "max_missing")
+  max_gap_len <- .weasel_check_count(max_gap_len, "max_gap_len")
+  n_gap_max   <- .weasel_check_count(n_gap_max, "n_gap_max")
+  if (!is.logical(require_endpoints) || length(require_endpoints) != 1 ||
+      is.na(require_endpoints)) {
+    .weasel_stop("require_endpoints must be TRUE or FALSE.")
+  }
+
+  if (!is.null(the$scope) && !isTRUE(override)) {
+    .weasel_stop("a scope already exists; set override = TRUE to replace it.")
+  }
+
+  env <- new.env(parent = emptyenv())
+  env$data              <- data
+  env$id                <- id
+  env$wave              <- wave
+  env$min_present       <- min_present
+  env$max_missing       <- max_missing
+  env$max_gap_len       <- max_gap_len
+  env$n_gap_max         <- n_gap_max
+  env$require_endpoints <- require_endpoints
+  env$lower             <- lower
+  env$upper             <- upper
+  env$grid              <- grid
+
+  the$scope <- env
+  .weasel_ok(weasel_text(post = " scope set"))
+  invisible(env)
+}
+
+#' Clear the active weasel scope
+#'
+#' Removes the scope created by [set_weasel_scope()]. Useful at the end
+#' of scripts, examples, and tests.
+#'
+#' @return `TRUE` invisibly if a scope was removed, `FALSE` otherwise.
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 20, n_times = 5, seed = 1)
+#' set_weasel_scope(d, "id", "time")
+#' weasel_clear_scope()
+#'
+#' @export
+weasel_clear_scope <- function() {
+  had <- !is.null(the$scope)
+  the$scope <- NULL
+  invisible(had)
+}
+
+# return the active scope or fail with a clear message
+#' @noRd
+assert_weasel_scope <- function() {
+  if (is.null(the$scope)) {
+    .weasel_stop("no scope set; run set_weasel_scope() first.",
+                 class = "weasel_error_no_scope")
+  }
+  the$scope
+}
+
+#' Inspect the active weasel scope
+#'
+#' Displays a compact status report of the active scope: the bound data,
+#' the grid and span, the structural constraints, and how far the
+#' pipeline has progressed. Reports "no active weasel scope." when no
+#' scope is set. Suppress the message with `suppressMessages()` or
+#' `options(weasel.verbose = FALSE)`.
+#'
+#' @return Invisibly, a list with the scope settings (`id`, `wave`,
+#'   `grid`, `lower`, `upper`, `span`, `min_present`, `max_missing`,
+#'   `max_gap_len`, `n_gap_max`, `require_endpoints`) and the progress
+#'   counters (`n_rows`, `n_kept`, `n_patterns`), or `NULL` when no
+#'   scope is active.
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 30, n_times = 6, seed = 1)
+#' set_weasel_scope(d, "id", "time", max_gap_len = 1)
+#' weasel_scope_info()
+#' weasel_reshape_to_wide()
+#' weasel_summarize_waves()
+#' weasel_scope_info()
+#' weasel_clear_scope()
+#'
+#' @export
+weasel_scope_info <- function() {
+  if (is.null(the$scope)) {
+    .weasel_msg("no active weasel scope.")
+    return(invisible(NULL))
+  }
+  env <- the$scope
+
+  lines <- c(
+    "weasel scope",
+    paste0("  data:        ", nrow(env$data), " rows; id = '", env$id,
+           "', wave = '", env$wave, "'"),
+    paste0("  grid:        ", env$grid)
+  )
+  if (!is.null(env$span)) {
+    lines <- c(lines, paste0("  span:        ", env$lower, ":", env$upper,
+                              " (", length(env$span), " waves)"))
+  } else {
+    req <- if (!is.null(env$lower) || !is.null(env$upper)) {
+      paste0(" (requested ", .weasel_or(env$lower, "min"), ":",
+             .weasel_or(env$upper, "max"), ")")
+    } else {
+      ""
+    }
+    lines <- c(lines, paste0("  span:        not evaluated yet", req))
+  }
+  cons <- character(0)
+  if (env$min_present > 1) {
+    cons <- c(cons, paste0("min_present >= ", env$min_present))
+  }
+  if (!is.null(env$max_missing)) {
+    cons <- c(cons, paste0("missing waves <= ", env$max_missing))
+  }
+  if (!is.null(env$max_gap_len)) {
+    cons <- c(cons, paste0("max interior gap <= ", env$max_gap_len))
+  }
+  if (!is.null(env$n_gap_max)) {
+    cons <- c(cons, paste0("interior gaps <= ", env$n_gap_max))
+  }
+  if (isTRUE(env$require_endpoints)) {
+    cons <- c(cons, "endpoints required")
+  }
+  lines <- c(lines, paste0("  constraints: ",
+    if (length(cons) > 0) paste(cons, collapse = ", ") else "none"))
+  stage <- c(
+    "set",
+    if (!is.null(env$span)) "evaluated",
+    if (!is.null(env$pivot)) paste0("reshaped (", nrow(env$pivot), " kept)"),
+    if (!is.null(env$view)) paste0("summarized (", nrow(env$view), " patterns)")
+  )
+  lines <- c(lines, paste0("  stage:       ", paste(stage, collapse = " -> ")))
+  .weasel_msg(paste(lines, collapse = "\n"))
+
+  invisible(list(
+    id = env$id, wave = env$wave, grid = env$grid,
+    lower = env$lower, upper = env$upper, span = env$span,
+    min_present = env$min_present, max_missing = env$max_missing,
+    max_gap_len = env$max_gap_len, n_gap_max = env$n_gap_max,
+    require_endpoints = env$require_endpoints,
+    n_rows = nrow(env$data),
+    n_kept = if (!is.null(env$pivot)) nrow(env$pivot) else NA_integer_,
+    n_patterns = if (!is.null(env$view)) nrow(env$view) else NA_integer_
+  ))
+}
+
+#' Evaluate wave bounds and the grid
+#'
+#' Finalises `lower`, `upper`, and the wave grid within the active
+#' scope, and validates `min_present` against the span length. Called
+#' automatically by [weasel_reshape_to_wide()], but can be run
+#' explicitly to inspect bounds before reshaping. With
+#' `grid = "consecutive"`, a warning (class `weasel_empty_waves`) is
+#' issued once per scope when the span contains waves that no respondent
+#' has, since such waves count as missed by everyone.
+#'
+#' @return The scope environment, invisibly.
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 50, n_times = 8, seed = 1)
+#' set_weasel_scope(d, "id", "time")
+#' evaluate_weasel_scope()
+#' weasel_clear_scope()
+#'
+#' @export
+evaluate_weasel_scope <- function() {
+  env <- assert_weasel_scope()
+
+  waves <- .weasel_check_wave(env$data[[env$wave]], env$wave)
+
+  if (is.null(env$lower)) env$lower <- min(waves)
+  if (is.null(env$upper)) env$upper <- max(waves)
+  env$lower <- as.integer(env$lower)
+  env$upper <- as.integer(env$upper)
+  if (env$upper < env$lower) .weasel_stop("upper must be >= lower.")
+
+  env$observed_waves <- waves
+  env$span <- .weasel_grid_waves(waves, env$lower, env$upper, env$grid)
+  if (env$grid == "consecutive" && !isTRUE(env$warned_empty)) {
+    .weasel_warn_empty_span(env$span, waves)
+    env$warned_empty <- TRUE
+  }
+
+  span_len <- length(env$span)
+  if (env$min_present > span_len) {
+    .weasel_stop("min_present (", env$min_present, ") exceeds the span ",
+                 env$lower, ":", env$upper, ", which has only ", span_len,
+                 " wave(s).")
+  }
+  env$span_len <- span_len
+  env$min_obs  <- env$min_present
+
+  invisible(env)
+}
+
+#' Reshape scoped data to a wide presence matrix
+#'
+#' Builds a respondent x wave data frame where each cell contains the
+#' wave number if the respondent is observed, and `NA` otherwise.
+#' Respondents with fewer than `min_present` observed waves are
+#' dropped, and the optional `max_missing`, `max_gap_len`, `n_gap_max`,
+#' and `require_endpoints` constraints from [set_weasel_scope()] are
+#' applied. Duplicated (id, wave) rows are counted once and trigger a
+#' warning.
+#'
+#' @return The pivot data frame, invisibly.
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 50, n_times = 8, seed = 1)
+#' set_weasel_scope(d, "id", "time")
+#' evaluate_weasel_scope()
+#' weasel_reshape_to_wide()
+#' weasel_clear_scope()
+#'
+#' @export
+weasel_reshape_to_wide <- function() {
+  env <- assert_weasel_scope()
+  evaluate_weasel_scope()
+
+  dat      <- env$data
+  id_col   <- env$id
+  wave_col <- env$wave
+  span     <- env$span
+  L        <- length(span)
+
+  .weasel_report_dropped(dat, id_col, wave_col, span)
+
+  participation <- .weasel_prepare_participation(dat, id_col, wave_col, span)
+  ids_v <- participation$ids
+  pos   <- participation$positions
+  if (length(ids_v) == 0) .weasel_stop("no rows in the selected span.")
+
+  .weasel_warn_duplicates(participation$n_dup, id_col, wave_col)
+  met <- .weasel_gap_metrics(ids_v, pos, L)
+
+  keep <- met$n_present >= env$min_obs
+  if (!is.null(env$max_missing)) {
+    keep <- keep & (L - met$n_present) <= env$max_missing
+  }
+  if (!is.null(env$max_gap_len)) {
+    keep <- keep & met$max_gap <= env$max_gap_len
+  }
+  if (!is.null(env$n_gap_max)) {
+    keep <- keep & met$n_gap <= env$n_gap_max
+  }
+  if (isTRUE(env$require_endpoints)) {
+    keep <- keep & met$has_lower & met$has_upper
+  }
+
+  n_dropped <- sum(!keep)
+  if (n_dropped > 0) {
+    .weasel_msg(n_dropped, " respondent(s) dropped by the scope ",
+                "constraints; ", sum(keep), " kept.")
+  }
+
+  ids2 <- met$id[keep]
+  if (length(ids2) == 0) {
+    .weasel_stop("no respondents satisfy the scope constraints.")
+  }
+
+  sel <- ids_v %in% ids2
+  m <- matrix(NA_integer_, nrow = length(ids2), ncol = L)
+  rownames(m) <- as.character(ids2)
+  colnames(m) <- as.character(span)
+  i <- match(ids_v[sel], ids2)
+  j <- pos[sel]
+  m[cbind(i, j)] <- span[j]
+
+  pivot <- data.frame(id_value = ids2, stringsAsFactors = FALSE)
+  names(pivot)[1] <- id_col
+  for (k in seq_len(ncol(m))) {
+    pivot[[colnames(m)[k]]] <- m[, k]
+  }
+
+  env$pivot         <- pivot
+  env$L             <- L
+  env$scope_metrics <- met
+
+  invisible(pivot)
+}
+
+# ---- wave pattern summary ------------------------------------------------
+
+# shape-safe pattern summary; works for any number of rows including one
+#' @noRd
+.summarize_patterns <- function(pivot, id_col, span_cols) {
+  mat <- as.matrix(pivot[, span_cols, drop = FALSE])
+  if (nrow(mat) == 0) {
+    return(list(
+      view = data.frame(pattern = integer(0), waves = character(0),
+                        n = integer(0), ids = integer(0),
+                        stringsAsFactors = FALSE),
+      waves_by_id = character(0)
+    ))
+  }
+
+  mat_chr <- matrix(ifelse(is.na(mat), ".", as.character(mat)),
+                    nrow = nrow(mat))
+  pat <- do.call(paste, c(as.data.frame(mat_chr, stringsAsFactors = FALSE),
+                          list(sep = " ")))
+  present_n <- as.integer(rowSums(!is.na(mat)))
+
+  tab      <- table(pat)
+  patterns <- names(tab)
+
+  view <- data.frame(
+    waves = patterns,
+    n     = present_n[match(patterns, pat)],
+    ids   = as.integer(tab),
+    stringsAsFactors = FALSE
+  )
+  view <- view[order(-view$ids, -view$n), , drop = FALSE]
+  rownames(view) <- NULL
+  # stable pattern id: assigned after sorting, so filtering the table
+  # never renumbers patterns and ids remain valid selectors
+  view <- cbind(pattern = seq_len(nrow(view)), view)
+
+  list(view = view, waves_by_id = pat)
+}
+
+#' Summarize wave patterns in the scoped data
+#'
+#' Groups respondents by their observed-wave pattern and counts how many
+#' share each pattern. Requires [weasel_reshape_to_wide()] to have been
+#' called. In the result, `pattern` is a stable pattern id (the row
+#' number of the full summary; filtering with
+#' [weasel_filter_wave_summary()] keeps it, so it can always be passed
+#' to [weasel_get_data_by_row()]), `waves` is the pattern (a `.` marks a
+#' missing wave), `n` is the number of observed waves in that pattern,
+#' and `ids` is the number of respondents sharing it. Rows are sorted by
+#' `ids`, then `n`, both descending.
+#'
+#' @return The summary data frame, invisibly.
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 50, n_times = 8, seed = 1)
+#' set_weasel_scope(d, "id", "time")
+#' evaluate_weasel_scope()
+#' weasel_reshape_to_wide()
+#' weasel_summarize_waves()
+#' weasel_clear_scope()
+#'
+#' @export
+weasel_summarize_waves <- function() {
+  env <- assert_weasel_scope()
+  if (is.null(env$pivot)) .weasel_stop("run weasel_reshape_to_wide() first.")
+
+  span_cols <- setdiff(names(env$pivot), env$id)
+  res <- .summarize_patterns(env$pivot, env$id, span_cols)
+
+  env$view        <- res$view
+  env$waves_by_id <- res$waves_by_id
+
+  invisible(env$view)
+}
+
+#' Filter the wave-pattern summary
+#'
+#' Narrows the pattern table produced by [weasel_summarize_waves()].
+#' The `pattern` column keeps its original values, so pattern ids
+#' identified in a filtered table can be passed directly to
+#' [weasel_get_data_by_row()].
+#'
+#' @param n_range Optional length-2 numeric vector giving the min/max
+#'   number of observed waves per pattern (the `n` column).
+#' @param ids_range Optional length-2 numeric vector giving the min/max
+#'   respondent count per pattern (the `ids` column).
+#'
+#' @return A filtered data frame.
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 50, n_times = 8, seed = 1)
+#' set_weasel_scope(d, "id", "time")
+#' evaluate_weasel_scope()
+#' weasel_reshape_to_wide()
+#' weasel_summarize_waves()
+#'
+#' # only patterns with at least 6 observed waves
+#' weasel_print_table(weasel_filter_wave_summary(n_range = c(6, Inf)))
+#'
+#' # only patterns shared by at least 3 respondents
+#' weasel_print_table(weasel_filter_wave_summary(ids_range = c(3, Inf)))
+#' weasel_clear_scope()
+#'
+#' @export
+weasel_filter_wave_summary <- function(n_range = NULL, ids_range = NULL) {
+  env <- assert_weasel_scope()
+  if (is.null(env$view)) .weasel_stop("run weasel_summarize_waves() first.")
+  if (!is.null(n_range) && length(n_range) != 2) {
+    .weasel_stop("n_range must be a length-2 numeric vector.")
+  }
+  if (!is.null(ids_range) && length(ids_range) != 2) {
+    .weasel_stop("ids_range must be a length-2 numeric vector.")
+  }
+
+  v <- env$view
+  if (!is.null(n_range)) {
+    v <- v[v$n >= min(n_range) & v$n <= max(n_range), , drop = FALSE]
+  }
+  if (!is.null(ids_range)) {
+    v <- v[v$ids >= min(ids_range) & v$ids <= max(ids_range), , drop = FALSE]
+  }
+  v
+}
+
+#' Retrieve long-format data matching wave-pattern rows
+#'
+#' After [weasel_summarize_waves()] has grouped respondents into
+#' patterns, this function extracts the long-format rows for every
+#' respondent who matches the given pattern row(s). Use
+#' [weasel_filter_wave_summary()] first to identify which patterns to
+#' request; the `pattern` ids it shows remain valid selectors here.
+#'
+#' @param i Pattern selector: an integer vector of pattern ids (the
+#'   `pattern` column of the summary, which equals the row numbers of
+#'   the full, unfiltered table), or a character vector of pattern
+#'   strings (`waves` values). Respondents matching any selected
+#'   pattern are returned. Defaults to the first pattern.
+#' @param within_span If `TRUE`, only rows whose wave lies inside the
+#'   scoped span are returned. If `FALSE` (default), all rows of the
+#'   matching respondents are returned, including waves outside the
+#'   span.
+#'
+#' @return A data frame (subset of the original long data).
+#'
+#' @examples
+#' d <- generate_weasel_dummy_data(n_ids = 50, n_times = 8, seed = 1)
+#' set_weasel_scope(d, "id", "time")
+#' evaluate_weasel_scope()
+#' weasel_reshape_to_wide()
+#' weasel_summarize_waves()
+#'
+#' subset1 <- weasel_get_data_by_row(1)
+#' weasel_print_table(head(subset1), title = "Row-1 data preview")
+#'
+#' # respondents matching either of the two most common patterns
+#' subset12 <- weasel_get_data_by_row(c(1, 2))
+#' weasel_clear_scope()
+#'
+#' @export
+weasel_get_data_by_row <- function(i = 1L, within_span = FALSE) {
+  env <- assert_weasel_scope()
+  if (is.null(env$view) || is.null(env$waves_by_id) || is.null(env$pivot)) {
+    .weasel_stop("run weasel_reshape_to_wide() and weasel_summarize_waves() first.")
+  }
+  if (nrow(env$view) == 0) .weasel_stop("the pattern summary is empty.")
+
+  if (is.character(i)) {
+    idx <- match(i, env$view$waves)
+    if (anyNA(idx)) {
+      .weasel_stop("pattern string(s) not found in the wave-pattern summary.")
+    }
+    i <- idx
+  }
+  ok <- is.numeric(i) && length(i) > 0 && !anyNA(i) &&
+    all(is.finite(i)) && all(abs(i - round(i)) <= 1e-8)
+  if (!ok) {
+    .weasel_stop("i must be pattern ids (integers) or pattern strings.")
+  }
+  i <- as.integer(round(i))
+  if (any(i < 1) || any(i > nrow(env$view))) {
+    .weasel_stop("row index out of range.")
+  }
+  i <- unique(i)
+
+  target   <- env$view$waves[i]
+  id_col   <- env$id
+  wave_col <- env$wave
+  dat      <- env$data
+
+  keep_ids <- env$pivot[[id_col]][env$waves_by_id %in% target]
+  out <- dat[dat[[id_col]] %in% keep_ids, , drop = FALSE]
+  if (isTRUE(within_span)) {
+    w_int <- as.integer(round(out[[wave_col]]))
+    out <- out[w_int %in% env$span, , drop = FALSE]
+  }
+  out
+}
+
+# ---- deprecated names ------------------------------------------------------
+
+#' @rdname weasel-deprecated
+#' @export
+reshape_to_wide <- function(...) {
+  .weasel_deprecate("reshape_to_wide", "weasel_reshape_to_wide")
+  weasel_reshape_to_wide(...)
+}
+
+#' @rdname weasel-deprecated
+#' @export
+summarize_waves <- function(...) {
+  .weasel_deprecate("summarize_waves", "weasel_summarize_waves")
+  weasel_summarize_waves(...)
+}
+
+#' @rdname weasel-deprecated
+#' @export
+filter_wave_summary <- function(...) {
+  .weasel_deprecate("filter_wave_summary", "weasel_filter_wave_summary")
+  weasel_filter_wave_summary(...)
+}
+
+#' @rdname weasel-deprecated
+#' @export
+get_data_by_row <- function(...) {
+  .weasel_deprecate("get_data_by_row", "weasel_get_data_by_row")
+  weasel_get_data_by_row(...)
+}
+
+#' @rdname weasel-deprecated
+#' @export
+generate_sets <- function() {
+  .weasel_deprecate("generate_sets", "evaluate_weasel_scope")
+  env <- assert_weasel_scope()
+  evaluate_weasel_scope()
+  invisible(env)
+}
+
+#' @rdname weasel-deprecated
+#' @export
+filter_sets <- function() {
+  .weasel_deprecate("filter_sets", "weasel_filter_wave_summary")
+  invisible(assert_weasel_scope())
+}

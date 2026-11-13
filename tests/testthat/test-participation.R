@@ -1,0 +1,247 @@
+# participation depends on valid respondent-wave rows, not item values
+participation_fixture <- function(grid = "consecutive", id_transform = identity) {
+  d <- data.frame(
+    id = c(rep("A", 4), rep("B", 2), rep("C", 2), "D", "E",
+           NA, "A", NA, "A", "A", "E", "E"),
+    time = c(1, 2, 4, 5, 1, 5, 2, 4, 1, 0, 3, NA, NA, 1, 2, 0, 0),
+    value = c(rep(NA_real_, 9), 10:17),
+    stringsAsFactors = FALSE
+  )
+  if (grid == "observed") {
+    d$time <- c(1990, 2000, 2002, 2005, 2009, 2014)[d$time + 1L]
+  }
+  # the near-integer duplicate still represents the same participation wave
+  d$time[15] <- d$time[15] + 1e-9
+  d$id <- id_transform(d$id)
+  d
+}
+
+participation_scenario <- function() {
+  data.frame(scenario = "anchored", require_endpoints = TRUE,
+             max_missing = 1, n_gap_max = 1, max_gap_len = 1)
+}
+
+test_that("dirty rows preserve hand-computed participation across both pipelines", {
+  on.exit(weasel_clear_scope(), add = TRUE)
+  representations <- list(
+    character = identity,
+    factor = function(x) factor(x, levels = c("unused", "D", "C", "B", "A", "E")),
+    integer = function(x) match(x, LETTERS[1:5])
+  )
+  for (grid in c("consecutive", "observed")) {
+    span <- if (grid == "consecutive") 1:5 else c(2000L, 2002L, 2005L, 2009L, 2014L)
+    for (transform_id in representations) {
+      d <- participation_fixture(grid, transform_id)
+      expected <- data.frame(
+        id = transform_id(c("A", "B", "C", "D")),
+        n_present = c(4L, 2L, 2L, 1L), n_missing = c(1L, 3L, 3L, 4L),
+        prop_present = c(0.8, 0.4, 0.4, 0.2),
+        has_lower = c(TRUE, TRUE, FALSE, TRUE),
+        has_upper = c(TRUE, TRUE, FALSE, FALSE),
+        n_gap = c(1L, 1L, 1L, 0L), max_gap = c(1L, 3L, 1L, 0L)
+      )
+      expected <- expected[order(expected$id), ]
+      rownames(expected) <- NULL
+      p <- suppressMessages(suppressWarnings(
+        weasel_plan(d, "id", "time", lower = span[1], upper = tail(span, 1),
+                    grid = grid, scenarios = participation_scenario())
+      ))
+      env <- suppressMessages(
+        set_weasel_scope(d, "id", "time", lower = span[1], upper = tail(span, 1),
+                         grid = grid, min_present = 4, max_gap_len = 1,
+                         n_gap_max = 1, require_endpoints = TRUE)
+      )
+      pivot <- suppressMessages(suppressWarnings(weasel_reshape_to_wide()))
+      expect_identical(p$span, span)
+      expect_identical(env$span, span)
+      expect_equal(p$id_metrics, expected)
+      expect_equal(env$scope_metrics, expected[names(env$scope_metrics)])
+      expect_identical(p$plan$ids[[1]], transform_id("A"))
+      expect_identical(pivot$id, p$plan$ids[[1]])
+      expect_identical(as.integer(pivot[1, -1]), replace(span, 3, NA_integer_))
+
+      # reversing rows and filling item values cannot change participation
+      d_reversed <- d[rev(seq_len(nrow(d))), ]
+      d_reversed$value <- 1
+      p_reversed <- suppressMessages(suppressWarnings(
+        weasel_plan(d_reversed, "id", "time", lower = span[1],
+                    upper = tail(span, 1), grid = grid,
+                    scenarios = participation_scenario())
+      ))
+      expect_equal(p_reversed$id_metrics, expected)
+      expect_identical(p_reversed$plan$ids, p$plan$ids)
+    }
+  }
+})
+
+test_that("participation is deduplicated while retained long rows stay intact", {
+  d <- participation_fixture()
+  on.exit(weasel_clear_scope(), add = TRUE)
+  expect_warning(
+    p <- suppressMessages(weasel_plan(d, "id", "time", lower = 1, upper = 5,
+                                      scenarios = participation_scenario())),
+    class = "weasel_duplicates"
+  )
+  suppressMessages(set_weasel_scope(d, "id", "time", lower = 1, upper = 5))
+  expect_warning(suppressMessages(weasel_reshape_to_wide()),
+                 "2 duplicated", class = "weasel_duplicates")
+  expect_warning(out <- weasel_apply(p, "anchored"),
+                 "2 duplicated", class = "weasel_duplicates")
+  expect_identical(out, d[c(1:4, 14:15), ])
+  expect_identical(p$id_metrics$n_present[p$id_metrics$id == "A"], 4L)
+})
+
+test_that("outside-span duplicates retain the callers' warning boundaries", {
+  d <- data.frame(id = c(rep("A", 3), "B", "B"), time = c(1:3, 0, 0))
+  on.exit(weasel_clear_scope(), add = TRUE)
+  expect_warning(
+    p <- suppressMessages(weasel_plan(d, "id", "time", lower = 1, upper = 3)),
+    "1 duplicated", class = "weasel_duplicates"
+  )
+  suppressMessages(set_weasel_scope(d, "id", "time", lower = 1, upper = 3))
+  expect_no_warning(pivot <- suppressMessages(weasel_reshape_to_wide()))
+  expect_identical(pivot$id, "A")
+  expect_identical(p$id_metrics$id, "A")
+})
+
+test_that("a resolved span with no valid participants preserves caller errors", {
+  d <- data.frame(id = factor(c("A", NA, "B")), time = 1:3)
+  on.exit(weasel_clear_scope(), add = TRUE)
+  for (grid in c("consecutive", "observed")) {
+    expect_error(
+      suppressMessages(weasel_plan(d, "id", "time", lower = 2, upper = 2,
+                                   grid = grid)),
+      "no usable ids found in the chosen span", fixed = TRUE
+    )
+    suppressMessages(set_weasel_scope(d, "id", "time", lower = 2, upper = 2,
+                                     grid = grid))
+    expect_error(suppressMessages(weasel_reshape_to_wide()),
+                 "no rows in the selected span", fixed = TRUE)
+  }
+})
+
+test_that("planning warns for normalized duplicate rows throughout supplied data", {
+  scenarios <- data.frame(scenario = "all", require_endpoints = FALSE,
+                          max_missing = Inf, n_gap_max = Inf, max_gap_len = Inf)
+  for (grid in c("consecutive", "observed")) {
+    span <- if (grid == "consecutive") 1:3 else c(1L, 4L, 9L)
+    for (inside in c(TRUE, FALSE)) {
+      duplicate_wave <- if (inside) 1 else 0
+      d <- data.frame(
+        id = factor(c(rep("A", 3), rep("B", 3), "C", "C", NA, NA, "A", "A"),
+                    levels = c("unused", "C", "B", "A")),
+        time = c(span, duplicate_wave + c(0, 1e-9, -1e-9),
+                 duplicate_wave + c(0, 1e-9), 1, 1 + 1e-9, NA, NA),
+        value = seq_len(12)
+      )
+      make_plan <- function(data) suppressMessages(
+        weasel_plan(data, "id", "time", lower = span[1], upper = tail(span, 1),
+                    grid = grid, scenarios = scenarios, keep_data = FALSE)
+      )
+      # two extra B rows plus one extra C row; missing IDs/waves do not count
+      expect_warning(p <- make_plan(d), "^3 duplicated", class = "weasel_duplicates")
+      normalized <- d
+      normalized$time <- round(normalized$time)
+      expect_identical(p, suppressWarnings(make_plan(normalized)))
+      reversed <- d[rev(seq_len(nrow(d))), ]
+      expect_warning(p_reversed <- make_plan(reversed), "^3 duplicated",
+                     class = "weasel_duplicates")
+      expect_identical(p_reversed, p)
+      expect_identical(p$id_metrics$n_present,
+                       if (inside) c(1L, 1L, 3L) else 3L)
+
+      # original fractional values and all selected physical rows survive
+      keep <- !is.na(d$id) & !is.na(d$time) & round(d$time) %in% span
+      if (inside) {
+        expect_warning(out <- weasel_apply(p, "all", data = d), "^3 duplicated",
+                       class = "weasel_duplicates")
+      } else {
+        expect_no_warning(out <- weasel_apply(p, "all", data = d))
+      }
+      expect_identical(out, d[keep, ])
+    }
+  }
+})
+
+test_that("wave normalization does not invent duplicates or accept fractional waves", {
+  d <- data.frame(
+    id = c("A", "A", "B", "B", NA, NA, "A", "A"),
+    time = c(1 - 1e-9, 2 + 1e-9, 1 + 1e-9, 3 - 1e-9,
+             1, 1 + 1e-9, NA, NA)
+  )
+  expect_no_warning(suppressMessages(
+    weasel_plan(d, "id", "time", lower = 1, upper = 3)
+  ))
+  d$time[1] <- 1.1
+  expect_error(weasel_plan(d, "id", "time", lower = 1, upper = 3),
+               "must contain integer-valued wave numbers", fixed = TRUE)
+})
+
+test_that("core candidates count valid participation on the resolved grid", {
+  for (grid in c("consecutive", "observed")) {
+    waves <- if (grid == "consecutive") 1:5 else c(1998L, 2000L, 2005L, 2011L, 2012L)
+    d <- data.frame(
+      id = c("A", "A", "A", "A", "B", "B", NA, "A", "A", "A"),
+      time = waves[c(1, 2, 4, 5, 1, 4, 3, NA, 5, 5)]
+    )
+    d$time[10] <- d$time[10] + 1e-9
+    # wave coverage is 2, 1, 0, 2, 1; the missing-ID wave stays in the grid
+    expected <- data.frame(lower = waves[1:4], upper = waves[2:5],
+                           coverage = c(3L, 1L, 2L, 3L),
+                           chosen = c(TRUE, FALSE, FALSE, FALSE))
+    factor_data <- d
+    factor_data$id <- factor(d$id, levels = c("unused", "B", "A"))
+    reversed <- d[rev(seq_len(nrow(d))), ]
+    reversed$id <- factor(reversed$id, levels = c("A", "unused", "B"))
+    tie_message <- paste0(
+      "2 candidate windows tie on coverage (3 respondent-wave observations); ",
+      "the earliest, ", waves[1], ":", waves[2],
+      ", is used. inspect $span_candidates, or set explicit ",
+      "lower/upper bounds to pick another window."
+    )
+    for (panel in list(d, factor_data, reversed)) {
+      expect_warning(
+        expect_warning(
+          p <- suppressMessages(weasel_plan(panel, "id", "time", span = "core",
+                                            core_len = 2, grid = grid)),
+          "^2 duplicated", class = "weasel_duplicates"
+        ),
+        tie_message, class = "weasel_tied_windows", fixed = TRUE
+      )
+      expect_identical(p$span_candidates, expected)
+      expect_identical(p$span, waves[1:2])
+      expect_identical(p$span_reason, "core")
+    }
+  }
+})
+
+test_that("clamped core lengths retain coverage and report the adjustment", {
+  old <- options(weasel.verbose = TRUE)
+  on.exit(options(old), add = TRUE)
+  for (grid in c("consecutive", "observed")) {
+    waves <- if (grid == "consecutive") 1:5 else c(1998L, 2000L, 2005L, 2011L, 2012L)
+    d <- data.frame(id = c("A", "A", NA, "B", "B"), time = waves)
+    expect_message(
+      p_short <- suppressWarnings(weasel_plan(d, "id", "time", span = "core",
+                                               core_len = 1, grid = grid)),
+      paste0("core_len = 1 is outside the feasible window range 2:5 ",
+             "for this grid; using core_len = 2."), fixed = TRUE
+    )
+    expect_identical(p_short$span, waves[1:2])
+    expect_identical(p_short$span_candidates,
+                     data.frame(lower = waves[1:4], upper = waves[2:5],
+                                coverage = c(2L, 1L, 1L, 2L),
+                                chosen = c(TRUE, FALSE, FALSE, FALSE)))
+    expect_no_warning(expect_message(
+      p_long <- weasel_plan(d, "id", "time", span = "core", core_len = 20,
+                            grid = grid),
+      paste0("core_len = 20 is outside the feasible window range 2:5 ",
+             "for this grid; using core_len = 5."), fixed = TRUE
+    ))
+    expect_identical(p_long$span, waves)
+    expect_identical(p_long$span_reason, "core")
+    expect_identical(p_long$span_candidates,
+                     data.frame(lower = waves[1], upper = waves[5],
+                                coverage = 4L, chosen = TRUE))
+  }
+})

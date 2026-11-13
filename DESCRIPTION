@@ -1,0 +1,34 @@
+Package: weasel
+Type: Package
+Title: Wave-Based Extraction and Selection for Longitudinal Data
+Version: 0.4.4
+Authors@R: 
+    person("Siard", "van den Bosch", , "siardvandenbosch@me.com",
+           role = c("aut", "cre", "cph"))
+Description: Turns wave-and-respondent selection in longitudinal panel
+    and repeated-measures data into an explicit, reproducible workflow.
+    Provides a scope-based pipeline for wave pattern analysis and a
+    planning interface for scenario-based respondent selection with
+    configurable missing-wave tolerances, interior-gap constraints, and
+    endpoint requirements.
+    Wave grids may be consecutive integers or the observed schedule
+    (e.g. biennial panels). Includes tolerance-sensitivity and
+    attrition-selectivity diagnostics, plus a generator of
+    ready-to-paste methods-section justification text. A full workflow
+    guide is available at <https://siardv.github.io/weasel/>.
+License: MIT + file LICENSE
+URL: https://github.com/siardv/weasel, https://siardv.github.io/weasel/
+BugReports: https://github.com/siardv/weasel/issues
+Encoding: UTF-8
+Depends: R (>= 3.6)
+Imports: stats, tools, utils
+Suggests: cli, knitr, rmarkdown, testthat (>= 3.0.0)
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+RoxygenNote: 7.3.1
+NeedsCompilation: no
+Packaged: 2026-10-17 18:17:51 UTC; siardv
+Author: Siard van den Bosch [aut, cre, cph]
+Maintainer: Siard van den Bosch <siardvandenbosch@me.com>
+Repository: CRAN
+Date/Publication: 2026-11-13 16:10:02 UTC

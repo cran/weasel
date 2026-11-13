@@ -1,0 +1,405 @@
+---
+title: "Advanced weasel: Selection Constraints and Diagnostics"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Advanced weasel: Selection Constraints and Diagnostics}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(weasel)
+long_data <- generate_weasel_dummy_data(
+  n_ids = 400,
+  n_times = 12,
+  seed = 7
+)
+```
+
+## Gap semantics
+
+Two kinds of absence are treated differently throughout the package:
+
+* **Endpoints**: whether a respondent is observed at the first and last
+  wave of the window. Controlled by `require_endpoints` in scenarios
+  and reported as `has_lower` / `has_upper` in the id metrics.
+* **Interior gaps**: runs of missing waves strictly between a
+  respondent's first and last observed wave within the window. A
+  respondent observed at waves 2 to 7 of a 1-to-8 window has no
+  interior gap; late entry and early exit are not gaps.
+
+This separation keeps the constraints orthogonal: you can demand
+anchored endpoints while tolerating interior gaps, or the reverse.
+
+## Custom scenarios
+
+`weasel_plan()` accepts a custom scenario table. It must contain the
+columns `scenario`, `require_endpoints`, `max_missing`, `n_gap_max`,
+and `max_gap_len`; the table is validated and a missing column raises
+an immediate error rather than silently selecting nobody.
+
+```{r}
+my_scenarios <- data.frame(
+  scenario          = c("complete_case", "one_gap_ok", "very_lenient"),
+  require_endpoints = c(TRUE, TRUE, FALSE),
+  max_missing       = c(0, 2, 4),
+  n_gap_max         = c(0, 1, 4),
+  max_gap_len       = c(0, 2, 4)
+)
+
+plan_custom <- weasel_plan(
+  long_data,
+  id = "id",
+  wave = "time",
+  span = "core",
+  core_len = 8,
+  scenarios = my_scenarios
+)
+
+weasel_print_table(
+  weasel_compare_scenarios(plan_custom),
+  title = "Custom scenarios", digits = 3
+)
+```
+
+## Scoring and weights
+
+The composite score is built only from observed subset quality. With
+default weights it is:
+
+```
+score = 2.0 * mean_prop_present      (coverage)
+      + 1.2 * endpoint_rate          (endpoints)
+      + 0.8 * n_ids / max(n_ids)     (relative sample size)
+      - 0.6 * worst_missing / L      (worst retained respondent)
+      - 0.4 * (mean_n_gap + mean_max_gap) / L   (gap structure)
+```
+
+Scenarios that retain no respondents receive `NA` and are never
+recommended; exact ties go to the larger sample, then to input-table
+order, and `tie_tolerance` flags near-ties without changing the
+recommendation. You can reweight any term:
+
+```{r}
+size_first <- weasel_compare_scenarios(
+  plan_custom,
+  weights = c(size = 3, coverage = 1)
+)
+size_first$scenario[size_first$recommended]
+```
+
+## Non-consecutive wave schedules
+
+Both pipelines evaluate presence over a wave grid. The default,
+`grid = "consecutive"`, treats every integer between the span bounds as
+a scheduled wave. That is wrong for biennial panels or panels whose
+waves are recorded as years: every skipped year would count as a wave
+missed by everyone.
+
+```{r}
+biennial <- generate_weasel_dummy_data(
+  n_ids = 200,
+  waves = seq(2008, 2022, by = 2),
+  seed = 11
+)
+sort(unique(biennial$time))
+```
+
+With the consecutive default, weasel now warns (a
+`weasel_empty_waves` warning) and every scenario collapses:
+
+```{r}
+p_wrong <- weasel_plan(biennial, "id", "time", span = "full")
+weasel_compare_scenarios(p_wrong)$n_ids
+```
+
+`grid = "observed"` evaluates presence on the schedule that actually
+occurs in the data. Interior gaps then mean skipped *scheduled* waves,
+and the span length `L` counts observed waves:
+
+```{r}
+p_biennial <- weasel_plan(biennial, "id", "time",
+                          span = "full", grid = "observed")
+p_biennial
+```
+
+`span = "core"` combines with `grid = "observed"` as you would expect:
+the window is a block of `core_len` consecutive *scheduled* waves.
+The same `grid` argument exists in `set_weasel_scope()` for the
+exploratory pipeline.
+
+## Sensitivity of the sample size to the tolerances
+
+How strongly does the retained sample react to the tolerance settings?
+`weasel_sensitivity()` sweeps every combination of the supplied values
+against the per-respondent metrics already stored in the plan, so it is
+cheap even for large panels:
+
+```{r}
+sens <- weasel_sensitivity(
+  plan_custom,
+  require_endpoints = c(TRUE, FALSE),
+  max_missing = 0:2,
+  n_gap_max = 0:1,
+  max_gap_len = 0:2
+)
+weasel_print_table(sens, title = "Tolerance sweep", n = 10)
+```
+
+A steep jump in `n_ids` between adjacent rows tells you exactly which
+constraint is binding; reviewers tend to ask for this table.
+
+## Selectivity: who gets excluded?
+
+Selecting on participation completeness can bias a sample if retention
+relates to the covariates you study. `weasel_selectivity()` compares
+retained respondents with those observed in the span but excluded,
+using each respondent's value at their first observed wave (or their
+within-span mean with `at = "mean"`), and reports standardized mean
+differences:
+
+First observed waves can differ between respondents, so this need not
+compare a common baseline. A missing item at the first observed wave
+remains missing, even if a later wave has a value. Within-span means
+can also average different sets of waves. For covariates that change
+over time, differing observation times can contribute to the comparison.
+
+```{r}
+sel <- weasel_selectivity(plan_custom, "one_gap_ok")
+weasel_print_table(sel, title = "Retained vs excluded", digits = 3)
+```
+
+Absolute SMD values around 0.1 are a descriptive balance heuristic,
+rather than a universal cutoff (see
+[Austin, 2009](https://doi.org/10.1002/sim.3697)). Participation in this
+example is generated without using the covariates, but finite-sample
+differences can still exceed that value, as `var2` and `var1` do here.
+These comparisons describe observed covariate means; small SMDs do not
+establish similar distributions, ignorable attrition or unbiased estimates.
+
+## Plans without attached data
+
+By default the plan object carries the original data, which is
+convenient but heavy for large panels (for example when saving plans
+with `saveRDS()`). Use `keep_data = FALSE` and pass the data back in
+where needed:
+
+```{r}
+p_light <- weasel_plan(long_data, "id", "time",
+                       span = "full", keep_data = FALSE)
+nrow(weasel_apply(p_light, "lenient", data = long_data))
+```
+
+`weasel_sensitivity()` and `weasel_justify_subset()` keep working on
+such plans because they only need the stored metrics.
+
+New plans store a structural fingerprint with `encoding_version = 2`:
+aggregate counts plus an order-invariant digest of the deduplicated
+(id, wave) assignments across the full supplied panel, including waves
+outside the selected window. The encoding preserves supported ID values
+exactly, including distinct numeric values and strings containing separator
+characters, and does not depend on numeric display options. Covariate
+values are excluded. The guard checks explicitly supplied data; reuse of
+attached data assumes the original attached object.
+
+A structural mismatch, including reassigned participation with unchanged
+aggregate counts, produces one classed warning (`weasel_data_mismatch`).
+The result still uses the stored scenario IDs: the guard does not replan,
+change the saved plan or ensure that changed data satisfy the original
+scenario. Review the warning before using the result:
+
+```{r}
+d_other <- long_data[-(1:10), ]
+msg <- tryCatch(
+  weasel_apply(p_light, "lenient", data = d_other),
+  warning = function(w) conditionMessage(w)
+)
+substr(msg, 1, 78)
+```
+
+Saved plans are checked using their recorded encoding version. Fingerprints
+without a version retain the historical v1 encoding, including its loss of
+some numeric ID distinctions, ambiguous separator framing and dependence on
+numeric display options. Older count-only fingerprints compare their stored fields;
+plans without a fingerprint have no structural guard. No saved fingerprint is
+silently upgraded. Rebuild a plan from its verified original data to create a
+new fingerprint. An unsupported or malformed encoding version raises
+`weasel_error_fingerprint_version` rather than falling back to v1.
+
+The fingerprint is an accidental-drift diagnostic, not authentication of
+covariate values or protection against deliberate tampering.
+
+## Span selection in detail
+
+`span = "core"` slides a window of `core_len` consecutive grid waves
+over the full observed range and scores each window by mean per-wave
+respondent coverage; with `grid = "consecutive"`, waves with no
+observations contribute zero, so the chosen window is always a
+contiguous block of `core_len` integer waves. Use `span = "full"` to
+keep the entire range:
+
+```{r}
+plan_full <- weasel_plan(long_data, "id", "time", span = "full")
+c(lower = plan_full$lower, upper = plan_full$upper)
+```
+
+## Explicit analysis windows
+
+To supply your own analysis window, pass explicit bounds. The plan
+records `span_reason = "explicit"`, and `weasel_justify_subset()`
+describes the bounds as user-supplied without inferring when or why
+they were chosen:
+
+```{r}
+plan_fixed <- weasel_plan(long_data, "id", "time", lower = 3, upper = 10)
+plan_fixed$span_reason
+```
+
+For automatic core windows, the selection is inspectable: every
+candidate window and its coverage is stored, the chosen one is
+flagged, and exact coverage ties raise a classed warning
+(`weasel_tied_windows`) instead of being resolved silently:
+
+```{r}
+weasel_print_table(plan_custom$span_candidates, digits = 0)
+```
+
+## Auditing the recommendation
+
+`recommended` marks the highest composite score under the declared
+weights, nothing more. The active weights and the per-scenario score
+decomposition travel with the comparison table, `near_tie` flags
+scenarios the score cannot meaningfully separate (tune with
+`tie_tolerance`), and because the size term is normalised within the
+supplied scenario set, scores are comparison-relative rather than
+absolute properties of a scenario. Existing scores move only when the
+largest retained sample in the set changes, which can reverse a ranking
+between two otherwise unchanged scenarios; a zero `size` weight removes
+the effect:
+
+```{r}
+cmp_audit <- weasel_compare_scenarios(plan_custom)
+attr(cmp_audit, "weights")
+weasel_print_table(attr(cmp_audit, "score_components"), digits = 3)
+cmp_audit[c("scenario", "score", "recommended", "near_tie")]
+```
+
+## The planning population
+
+Respondents enter the planning population when they are observed at
+least once inside the span; every retention proportion is relative to
+that population, not to the full panel. Plans store and print the
+counts, and the justification text states the denominator explicitly:
+
+```{r}
+plan_custom$population
+```
+
+## Auditing per-respondent metrics
+
+The plan object exposes the per-respondent table that the scenarios
+filter on, which is useful for custom diagnostics:
+
+```{r}
+m <- plan_custom$id_metrics
+weasel_print_table(head(m, 8), title = "Per-respondent metrics")
+
+# distribution of interior gap counts
+table(m$n_gap)
+```
+
+## Scope pipeline constraints
+
+The exploratory pipeline accepts the same structural vocabulary as the
+scenario tables. `min_present` sets the minimum number of observed
+waves a respondent needs to be kept (default 1, so exploration shows
+everyone); `max_missing`, `max_gap_len`, `n_gap_max`, and
+`require_endpoints` apply the same constraints a plan scenario would:
+
+```{r}
+set_weasel_scope(
+  long_data,
+  id = "id", wave = "time",
+  lower = 2, upper = 11,
+  min_present = 6,   # at least 6 observed waves within the span
+  max_gap_len = 1,   # no interior gap longer than 1 wave
+  n_gap_max = 2      # at most 2 interior gaps
+)
+evaluate_weasel_scope()
+weasel_reshape_to_wide()
+weasel_summarize_waves()
+weasel_print_table(weasel_filter_wave_summary(),
+                   title = "Constrained patterns", n = 8)
+weasel_clear_scope()
+```
+
+## Justification styles
+
+`weasel_justify_subset()` writes the methods paragraph in three
+registers:
+
+```{r}
+cat(weasel_justify_subset(plan_custom, "one_gap_ok", style = "concise"),
+    "\n")
+```
+
+The in-text citation (package author and year) is derived
+automatically from the package's own citation metadata, so the
+zero-argument call is already fully citable; supply `author`/`year`
+only to override the derived reference:
+
+```{r}
+cat(weasel_justify_subset(plan_custom, "one_gap_ok"), "\n\n")
+cat(weasel_justify_subset(plan_custom, "one_gap_ok", style = "methods",
+                          author = "van den Bosch", year = "2026"),
+    "\n")
+```
+
+The `extended` style adds a fuller design rationale:
+
+```{r}
+cat(weasel_justify_subset(plan_custom, "one_gap_ok", style = "extended"),
+    "\n")
+```
+
+## Quiet mode and reproducibility
+
+All status messages respect a single option:
+
+```{r}
+options(weasel.verbose = FALSE)
+p_quiet <- weasel_plan(long_data, "id", "time", span = "full")
+options(weasel.verbose = TRUE)
+```
+
+The data generator runs synthetic draws in a separate R process, while
+console colours rotate using package-private state without random draws.
+Neither writes to the caller's global workspace. The caller's random-number
+stream, RNG configuration and cached Box-Muller normal deviate remain
+untouched. Explicit seeds reproduce the same panels as before. Without a
+seed, each generation process draws and reports its own seed; repeated calls
+can produce different panels. Each call incurs R process startup time, and
+temporary files are removed on exit, including errors.
+
+You can also use `suppressMessages()` for the logo, scope report and full
+demonstration. Quiet mode suppresses explicit table display too, while
+retaining its formatted return value. For example, generation leaves your
+analysis stream unchanged:
+
+```{r}
+set.seed(99)
+before <- rnorm(2)
+
+set.seed(99)
+tmp <- generate_weasel_dummy_data(n_ids = 20, n_times = 5, seed = 1)
+after <- rnorm(2)
+
+identical(before, after)
+```

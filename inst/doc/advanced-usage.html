@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>Advanced weasel: Selection Constraints and Diagnostics</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Advanced weasel: Selection Constraints and
+Diagnostics</h1>
+
+
+
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(weasel)</span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a>long_data <span class="ot">&lt;-</span> <span class="fu">generate_weasel_dummy_data</span>(</span>
+<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a>  <span class="at">n_ids =</span> <span class="dv">400</span>,</span>
+<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a>  <span class="at">n_times =</span> <span class="dv">12</span>,</span>
+<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">7</span></span>
+<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a>)</span>
+<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a><span class="co">#&gt; seed: 7</span></span></code></pre></div>
+<div id="gap-semantics" class="section level2">
+<h2>Gap semantics</h2>
+<p>Two kinds of absence are treated differently throughout the
+package:</p>
+<ul>
+<li><strong>Endpoints</strong>: whether a respondent is observed at the
+first and last wave of the window. Controlled by
+<code>require_endpoints</code> in scenarios and reported as
+<code>has_lower</code> / <code>has_upper</code> in the id metrics.</li>
+<li><strong>Interior gaps</strong>: runs of missing waves strictly
+between a respondent’s first and last observed wave within the window. A
+respondent observed at waves 2 to 7 of a 1-to-8 window has no interior
+gap; late entry and early exit are not gaps.</li>
+</ul>
+<p>This separation keeps the constraints orthogonal: you can demand
+anchored endpoints while tolerating interior gaps, or the reverse.</p>
+</div>
+<div id="custom-scenarios" class="section level2">
+<h2>Custom scenarios</h2>
+<p><code>weasel_plan()</code> accepts a custom scenario table. It must
+contain the columns <code>scenario</code>,
+<code>require_endpoints</code>, <code>max_missing</code>,
+<code>n_gap_max</code>, and <code>max_gap_len</code>; the table is
+validated and a missing column raises an immediate error rather than
+silently selecting nobody.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>my_scenarios <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>  <span class="at">scenario          =</span> <span class="fu">c</span>(<span class="st">&quot;complete_case&quot;</span>, <span class="st">&quot;one_gap_ok&quot;</span>, <span class="st">&quot;very_lenient&quot;</span>),</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>  <span class="at">require_endpoints =</span> <span class="fu">c</span>(<span class="cn">TRUE</span>, <span class="cn">TRUE</span>, <span class="cn">FALSE</span>),</span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>  <span class="at">max_missing       =</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">2</span>, <span class="dv">4</span>),</span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>  <span class="at">n_gap_max         =</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">1</span>, <span class="dv">4</span>),</span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>  <span class="at">max_gap_len       =</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="dv">2</span>, <span class="dv">4</span>)</span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a>)</span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a></span>
+<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a>plan_custom <span class="ot">&lt;-</span> <span class="fu">weasel_plan</span>(</span>
+<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a>  long_data,</span>
+<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a>  <span class="at">id =</span> <span class="st">&quot;id&quot;</span>,</span>
+<span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a>  <span class="at">wave =</span> <span class="st">&quot;time&quot;</span>,</span>
+<span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a>  <span class="at">span =</span> <span class="st">&quot;core&quot;</span>,</span>
+<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a>  <span class="at">core_len =</span> <span class="dv">8</span>,</span>
+<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a>  <span class="at">scenarios =</span> my_scenarios</span>
+<span id="cb2-16"><a href="#cb2-16" tabindex="-1"></a>)</span>
+<span id="cb2-17"><a href="#cb2-17" tabindex="-1"></a><span class="co">#&gt; rows not used for participation: 0 with missing id, 0 with missing time, 1368 outside span 1:8.</span></span>
+<span id="cb2-18"><a href="#cb2-18" tabindex="-1"></a><span class="co">#&gt; ✔ plan ready: span 1:8 (core, L = 8)</span></span>
+<span id="cb2-19"><a href="#cb2-19" tabindex="-1"></a></span>
+<span id="cb2-20"><a href="#cb2-20" tabindex="-1"></a><span class="fu">weasel_print_table</span>(</span>
+<span id="cb2-21"><a href="#cb2-21" tabindex="-1"></a>  <span class="fu">weasel_compare_scenarios</span>(plan_custom),</span>
+<span id="cb2-22"><a href="#cb2-22" tabindex="-1"></a>  <span class="at">title =</span> <span class="st">&quot;Custom scenarios&quot;</span>, <span class="at">digits =</span> <span class="dv">3</span></span>
+<span id="cb2-23"><a href="#cb2-23" tabindex="-1"></a>)</span>
+<span id="cb2-24"><a href="#cb2-24" tabindex="-1"></a><span class="co">#&gt; ── Custom scenarios ────────────────────────────────────────────────────────────</span></span>
+<span id="cb2-25"><a href="#cb2-25" tabindex="-1"></a><span class="co">#&gt;       scenario require_endpoints max_missing n_gap_max max_gap_len n_ids</span></span>
+<span id="cb2-26"><a href="#cb2-26" tabindex="-1"></a><span class="co">#&gt;  complete_case              TRUE           0         0           0   228</span></span>
+<span id="cb2-27"><a href="#cb2-27" tabindex="-1"></a><span class="co">#&gt;     one_gap_ok              TRUE           2         1           2   334</span></span>
+<span id="cb2-28"><a href="#cb2-28" tabindex="-1"></a><span class="co">#&gt;   very_lenient             FALSE           4         4           4   391</span></span>
+<span id="cb2-29"><a href="#cb2-29" tabindex="-1"></a><span class="co">#&gt;  mean_present mean_prop_present endpoint_rate mean_n_gap mean_max_gap</span></span>
+<span id="cb2-30"><a href="#cb2-30" tabindex="-1"></a><span class="co">#&gt;         8.000             1.000         1.000      0.000        0.000</span></span>
+<span id="cb2-31"><a href="#cb2-31" tabindex="-1"></a><span class="co">#&gt;         7.671             0.959         1.000      0.317        0.329</span></span>
+<span id="cb2-32"><a href="#cb2-32" tabindex="-1"></a><span class="co">#&gt;         7.453             0.932         0.882      0.348        0.358</span></span>
+<span id="cb2-33"><a href="#cb2-33" tabindex="-1"></a><span class="co">#&gt;  worst_missing lower upper L span_reason note score recommended near_tie</span></span>
+<span id="cb2-34"><a href="#cb2-34" tabindex="-1"></a><span class="co">#&gt;              0     1     8 8        core      3.666        TRUE    FALSE</span></span>
+<span id="cb2-35"><a href="#cb2-35" tabindex="-1"></a><span class="co">#&gt;              2     1     8 8        core      3.619       FALSE    FALSE</span></span>
+<span id="cb2-36"><a href="#cb2-36" tabindex="-1"></a><span class="co">#&gt;              4     1     8 8        core      3.387       FALSE    FALSE</span></span>
+<span id="cb2-37"><a href="#cb2-37" tabindex="-1"></a><span class="co">#&gt; (list column(s) not shown: ids)</span></span></code></pre></div>
+</div>
+<div id="scoring-and-weights" class="section level2">
+<h2>Scoring and weights</h2>
+<p>The composite score is built only from observed subset quality. With
+default weights it is:</p>
+<pre><code>score = 2.0 * mean_prop_present      (coverage)
+      + 1.2 * endpoint_rate          (endpoints)
+      + 0.8 * n_ids / max(n_ids)     (relative sample size)
+      - 0.6 * worst_missing / L      (worst retained respondent)
+      - 0.4 * (mean_n_gap + mean_max_gap) / L   (gap structure)</code></pre>
+<p>Scenarios that retain no respondents receive <code>NA</code> and are
+never recommended; exact ties go to the larger sample, then to
+input-table order, and <code>tie_tolerance</code> flags near-ties
+without changing the recommendation. You can reweight any term:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>size_first <span class="ot">&lt;-</span> <span class="fu">weasel_compare_scenarios</span>(</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>  plan_custom,</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a>  <span class="at">weights =</span> <span class="fu">c</span>(<span class="at">size =</span> <span class="dv">3</span>, <span class="at">coverage =</span> <span class="dv">1</span>)</span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a>)</span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a>size_first<span class="sc">$</span>scenario[size_first<span class="sc">$</span>recommended]</span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a><span class="co">#&gt; [1] &quot;very_lenient&quot;</span></span></code></pre></div>
+</div>
+<div id="non-consecutive-wave-schedules" class="section level2">
+<h2>Non-consecutive wave schedules</h2>
+<p>Both pipelines evaluate presence over a wave grid. The default,
+<code>grid = &quot;consecutive&quot;</code>, treats every integer between the span
+bounds as a scheduled wave. That is wrong for biennial panels or panels
+whose waves are recorded as years: every skipped year would count as a
+wave missed by everyone.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a>biennial <span class="ot">&lt;-</span> <span class="fu">generate_weasel_dummy_data</span>(</span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a>  <span class="at">n_ids =</span> <span class="dv">200</span>,</span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a>  <span class="at">waves =</span> <span class="fu">seq</span>(<span class="dv">2008</span>, <span class="dv">2022</span>, <span class="at">by =</span> <span class="dv">2</span>),</span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a>  <span class="at">seed =</span> <span class="dv">11</span></span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>)</span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="co">#&gt; seed: 11</span></span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a><span class="fu">sort</span>(<span class="fu">unique</span>(biennial<span class="sc">$</span>time))</span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="co">#&gt; [1] 2008 2010 2012 2014 2016 2018 2020 2022</span></span></code></pre></div>
+<p>With the consecutive default, weasel now warns (a
+<code>weasel_empty_waves</code> warning) and every scenario
+collapses:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>p_wrong <span class="ot">&lt;-</span> <span class="fu">weasel_plan</span>(biennial, <span class="st">&quot;id&quot;</span>, <span class="st">&quot;time&quot;</span>, <span class="at">span =</span> <span class="st">&quot;full&quot;</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a><span class="co">#&gt; Warning: 7 of 15 wave(s) in the span 2008:2022 have no observations for any</span></span>
+<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a><span class="co">#&gt; respondent (2009, 2011, 2013, 2015, 2017, ...); they count as missed by</span></span>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a><span class="co">#&gt; everyone. if waves are non-consecutive by design (e.g. biennial), use grid =</span></span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a><span class="co">#&gt; &quot;observed&quot;.</span></span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a><span class="co">#&gt; ✔ plan ready: span 2008:2022 (full, L = 15)</span></span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a><span class="fu">weasel_compare_scenarios</span>(p_wrong)<span class="sc">$</span>n_ids</span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a><span class="co">#&gt; [1] 0 0 0</span></span></code></pre></div>
+<p><code>grid = &quot;observed&quot;</code> evaluates presence on the schedule
+that actually occurs in the data. Interior gaps then mean skipped
+<em>scheduled</em> waves, and the span length <code>L</code> counts
+observed waves:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>p_biennial <span class="ot">&lt;-</span> <span class="fu">weasel_plan</span>(biennial, <span class="st">&quot;id&quot;</span>, <span class="st">&quot;time&quot;</span>,</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>                          <span class="at">span =</span> <span class="st">&quot;full&quot;</span>, <span class="at">grid =</span> <span class="st">&quot;observed&quot;</span>)</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a><span class="co">#&gt; ✔ plan ready: span 2008:2022 (full, 8 observed waves)</span></span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>p_biennial</span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a><span class="co">#&gt; &lt;weasel_plan&gt;</span></span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a><span class="co">#&gt;   span: 2008:2022 (full, 8 observed waves)</span></span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="co">#&gt;   respondents observed in span: 200</span></span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="co">#&gt;   population: 200 of 200 distinct ids observed in span (denominator: observed_in_span)</span></span>
+<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a><span class="co">#&gt;           scenario n_ids mean_prop_present endpoint_rate score recommended</span></span>
+<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a><span class="co">#&gt;    anchored_strict   114             1.000         1.000 3.693       FALSE</span></span>
+<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a><span class="co">#&gt;  anchored_balanced   156             0.966         1.000 3.705        TRUE</span></span>
+<span id="cb7-12"><a href="#cb7-12" tabindex="-1"></a><span class="co">#&gt;   lenient_info_max   185             0.941         0.892 3.570       FALSE</span></span>
+<span id="cb7-13"><a href="#cb7-13" tabindex="-1"></a><span class="co">#&gt;   data: 1439 row(s) attached</span></span></code></pre></div>
+<p><code>span = &quot;core&quot;</code> combines with
+<code>grid = &quot;observed&quot;</code> as you would expect: the window is a
+block of <code>core_len</code> consecutive <em>scheduled</em> waves. The
+same <code>grid</code> argument exists in
+<code>set_weasel_scope()</code> for the exploratory pipeline.</p>
+</div>
+<div id="sensitivity-of-the-sample-size-to-the-tolerances" class="section level2">
+<h2>Sensitivity of the sample size to the tolerances</h2>
+<p>How strongly does the retained sample react to the tolerance
+settings? <code>weasel_sensitivity()</code> sweeps every combination of
+the supplied values against the per-respondent metrics already stored in
+the plan, so it is cheap even for large panels:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>sens <span class="ot">&lt;-</span> <span class="fu">weasel_sensitivity</span>(</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a>  plan_custom,</span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a>  <span class="at">require_endpoints =</span> <span class="fu">c</span>(<span class="cn">TRUE</span>, <span class="cn">FALSE</span>),</span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a>  <span class="at">max_missing =</span> <span class="dv">0</span><span class="sc">:</span><span class="dv">2</span>,</span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a>  <span class="at">n_gap_max =</span> <span class="dv">0</span><span class="sc">:</span><span class="dv">1</span>,</span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a>  <span class="at">max_gap_len =</span> <span class="dv">0</span><span class="sc">:</span><span class="dv">2</span></span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a>)</span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="fu">weasel_print_table</span>(sens, <span class="at">title =</span> <span class="st">&quot;Tolerance sweep&quot;</span>, <span class="at">n =</span> <span class="dv">10</span>)</span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="co">#&gt; ── Tolerance sweep ─────────────────────────────────────────────────────────────</span></span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a><span class="co">#&gt;  require_endpoints max_missing n_gap_max max_gap_len n_ids prop_ids</span></span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="co">#&gt;               TRUE           0         0           0   228     0.57</span></span>
+<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt;               TRUE           0         0           1   228     0.57</span></span>
+<span id="cb8-13"><a href="#cb8-13" tabindex="-1"></a><span class="co">#&gt;               TRUE           0         0           2   228     0.57</span></span>
+<span id="cb8-14"><a href="#cb8-14" tabindex="-1"></a><span class="co">#&gt;               TRUE           0         1           0   228     0.57</span></span>
+<span id="cb8-15"><a href="#cb8-15" tabindex="-1"></a><span class="co">#&gt;               TRUE           0         1           1   228     0.57</span></span>
+<span id="cb8-16"><a href="#cb8-16" tabindex="-1"></a><span class="co">#&gt;               TRUE           0         1           2   228     0.57</span></span>
+<span id="cb8-17"><a href="#cb8-17" tabindex="-1"></a><span class="co">#&gt;               TRUE           1         0           0   228     0.57</span></span>
+<span id="cb8-18"><a href="#cb8-18" tabindex="-1"></a><span class="co">#&gt;               TRUE           1         0           1   228     0.57</span></span>
+<span id="cb8-19"><a href="#cb8-19" tabindex="-1"></a><span class="co">#&gt;               TRUE           1         0           2   228     0.57</span></span>
+<span id="cb8-20"><a href="#cb8-20" tabindex="-1"></a><span class="co">#&gt;               TRUE           1         1           0   228     0.57</span></span>
+<span id="cb8-21"><a href="#cb8-21" tabindex="-1"></a><span class="co">#&gt;  mean_prop_present</span></span>
+<span id="cb8-22"><a href="#cb8-22" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-23"><a href="#cb8-23" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-24"><a href="#cb8-24" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-25"><a href="#cb8-25" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-26"><a href="#cb8-26" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-27"><a href="#cb8-27" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-28"><a href="#cb8-28" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-29"><a href="#cb8-29" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-30"><a href="#cb8-30" tabindex="-1"></a><span class="co">#&gt;                  1</span></span>
+<span id="cb8-31"><a href="#cb8-31" tabindex="-1"></a><span class="co">#&gt;                  1</span></span></code></pre></div>
+<p>A steep jump in <code>n_ids</code> between adjacent rows tells you
+exactly which constraint is binding; reviewers tend to ask for this
+table.</p>
+</div>
+<div id="selectivity-who-gets-excluded" class="section level2">
+<h2>Selectivity: who gets excluded?</h2>
+<p>Selecting on participation completeness can bias a sample if
+retention relates to the covariates you study.
+<code>weasel_selectivity()</code> compares retained respondents with
+those observed in the span but excluded, using each respondent’s value
+at their first observed wave (or their within-span mean with
+<code>at = &quot;mean&quot;</code>), and reports standardized mean
+differences:</p>
+<p>First observed waves can differ between respondents, so this need not
+compare a common baseline. A missing item at the first observed wave
+remains missing, even if a later wave has a value. Within-span means can
+also average different sets of waves. For covariates that change over
+time, differing observation times can contribute to the comparison.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a>sel <span class="ot">&lt;-</span> <span class="fu">weasel_selectivity</span>(plan_custom, <span class="st">&quot;one_gap_ok&quot;</span>)</span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="fu">weasel_print_table</span>(sel, <span class="at">title =</span> <span class="st">&quot;Retained vs excluded&quot;</span>, <span class="at">digits =</span> <span class="dv">3</span>)</span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a><span class="co">#&gt; ── Retained vs excluded ────────────────────────────────────────────────────────</span></span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a><span class="co">#&gt;  variable n_retained n_excluded mean_retained mean_excluded   diff    smd</span></span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a><span class="co">#&gt;      var2        331         64        18.379        16.809  1.569  0.224</span></span>
+<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a><span class="co">#&gt;      var1        331         65         7.592         7.000  0.592  0.126</span></span>
+<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a><span class="co">#&gt;      var5        326         65         9.900         9.672  0.228  0.076</span></span>
+<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a><span class="co">#&gt;      var4        328         65         3.930         3.815  0.114  0.058</span></span>
+<span id="cb9-9"><a href="#cb9-9" tabindex="-1"></a><span class="co">#&gt;      var3        324         64         0.287         0.312 -0.025 -0.055</span></span></code></pre></div>
+<p>Absolute SMD values around 0.1 are a descriptive balance heuristic,
+rather than a universal cutoff (see <a href="https://doi.org/10.1002/sim.3697">Austin, 2009</a>). Participation
+in this example is generated without using the covariates, but
+finite-sample differences can still exceed that value, as
+<code>var2</code> and <code>var1</code> do here. These comparisons
+describe observed covariate means; small SMDs do not establish similar
+distributions, ignorable attrition or unbiased estimates.</p>
+</div>
+<div id="plans-without-attached-data" class="section level2">
+<h2>Plans without attached data</h2>
+<p>By default the plan object carries the original data, which is
+convenient but heavy for large panels (for example when saving plans
+with <code>saveRDS()</code>). Use <code>keep_data = FALSE</code> and
+pass the data back in where needed:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>p_light <span class="ot">&lt;-</span> <span class="fu">weasel_plan</span>(long_data, <span class="st">&quot;id&quot;</span>, <span class="st">&quot;time&quot;</span>,</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>                       <span class="at">span =</span> <span class="st">&quot;full&quot;</span>, <span class="at">keep_data =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="co">#&gt; ✔ plan ready: span 1:12 (full, L = 12)</span></span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="fu">nrow</span>(<span class="fu">weasel_apply</span>(p_light, <span class="st">&quot;lenient&quot;</span>, <span class="at">data =</span> long_data))</span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a><span class="co">#&gt; [1] 3981</span></span></code></pre></div>
+<p><code>weasel_sensitivity()</code> and
+<code>weasel_justify_subset()</code> keep working on such plans because
+they only need the stored metrics.</p>
+<p>New plans store a structural fingerprint with
+<code>encoding_version = 2</code>: aggregate counts plus an
+order-invariant digest of the deduplicated (id, wave) assignments across
+the full supplied panel, including waves outside the selected window.
+The encoding preserves supported ID values exactly, including distinct
+numeric values and strings containing separator characters, and does not
+depend on numeric display options. Covariate values are excluded. The
+guard checks explicitly supplied data; reuse of attached data assumes
+the original attached object.</p>
+<p>A structural mismatch, including reassigned participation with
+unchanged aggregate counts, produces one classed warning
+(<code>weasel_data_mismatch</code>). The result still uses the stored
+scenario IDs: the guard does not replan, change the saved plan or ensure
+that changed data satisfy the original scenario. Review the warning
+before using the result:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a>d_other <span class="ot">&lt;-</span> long_data[<span class="sc">-</span>(<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>), ]</span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a>msg <span class="ot">&lt;-</span> <span class="fu">tryCatch</span>(</span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>  <span class="fu">weasel_apply</span>(p_light, <span class="st">&quot;lenient&quot;</span>, <span class="at">data =</span> d_other),</span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>  <span class="at">warning =</span> <span class="cf">function</span>(w) <span class="fu">conditionMessage</span>(w)</span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>)</span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a><span class="fu">substr</span>(msg, <span class="dv">1</span>, <span class="dv">78</span>)</span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a><span class="co">#&gt; [1] &quot;the supplied data do not structurally match the data this plan was built from &quot;</span></span></code></pre></div>
+<p>Saved plans are checked using their recorded encoding version.
+Fingerprints without a version retain the historical v1 encoding,
+including its loss of some numeric ID distinctions, ambiguous separator
+framing and dependence on numeric display options. Older count-only
+fingerprints compare their stored fields; plans without a fingerprint
+have no structural guard. No saved fingerprint is silently upgraded.
+Rebuild a plan from its verified original data to create a new
+fingerprint. An unsupported or malformed encoding version raises
+<code>weasel_error_fingerprint_version</code> rather than falling back
+to v1.</p>
+<p>The fingerprint is an accidental-drift diagnostic, not authentication
+of covariate values or protection against deliberate tampering.</p>
+</div>
+<div id="span-selection-in-detail" class="section level2">
+<h2>Span selection in detail</h2>
+<p><code>span = &quot;core&quot;</code> slides a window of <code>core_len</code>
+consecutive grid waves over the full observed range and scores each
+window by mean per-wave respondent coverage; with
+<code>grid = &quot;consecutive&quot;</code>, waves with no observations contribute
+zero, so the chosen window is always a contiguous block of
+<code>core_len</code> integer waves. Use <code>span = &quot;full&quot;</code> to
+keep the entire range:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a>plan_full <span class="ot">&lt;-</span> <span class="fu">weasel_plan</span>(long_data, <span class="st">&quot;id&quot;</span>, <span class="st">&quot;time&quot;</span>, <span class="at">span =</span> <span class="st">&quot;full&quot;</span>)</span>
+<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a><span class="co">#&gt; ✔ plan ready: span 1:12 (full, L = 12)</span></span>
+<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a><span class="fu">c</span>(<span class="at">lower =</span> plan_full<span class="sc">$</span>lower, <span class="at">upper =</span> plan_full<span class="sc">$</span>upper)</span>
+<span id="cb12-4"><a href="#cb12-4" tabindex="-1"></a><span class="co">#&gt; lower upper </span></span>
+<span id="cb12-5"><a href="#cb12-5" tabindex="-1"></a><span class="co">#&gt;     1    12</span></span></code></pre></div>
+</div>
+<div id="explicit-analysis-windows" class="section level2">
+<h2>Explicit analysis windows</h2>
+<p>To supply your own analysis window, pass explicit bounds. The plan
+records <code>span_reason = &quot;explicit&quot;</code>, and
+<code>weasel_justify_subset()</code> describes the bounds as
+user-supplied without inferring when or why they were chosen:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>plan_fixed <span class="ot">&lt;-</span> <span class="fu">weasel_plan</span>(long_data, <span class="st">&quot;id&quot;</span>, <span class="st">&quot;time&quot;</span>, <span class="at">lower =</span> <span class="dv">3</span>, <span class="at">upper =</span> <span class="dv">10</span>)</span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="co">#&gt; rows not used for participation: 0 with missing id, 0 with missing time, 1438 outside span 3:10.</span></span>
+<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a><span class="co">#&gt; ✔ plan ready: span 3:10 (explicit, L = 8)</span></span>
+<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a>plan_fixed<span class="sc">$</span>span_reason</span>
+<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a><span class="co">#&gt; [1] &quot;explicit&quot;</span></span></code></pre></div>
+<p>For automatic core windows, the selection is inspectable: every
+candidate window and its coverage is stored, the chosen one is flagged,
+and exact coverage ties raise a classed warning
+(<code>weasel_tied_windows</code>) instead of being resolved
+silently:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="fu">weasel_print_table</span>(plan_custom<span class="sc">$</span>span_candidates, <span class="at">digits =</span> <span class="dv">0</span>)</span>
+<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a><span class="co">#&gt;  lower upper coverage chosen</span></span>
+<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a><span class="co">#&gt;      1     8     2936   TRUE</span></span>
+<span id="cb14-4"><a href="#cb14-4" tabindex="-1"></a><span class="co">#&gt;      2     9     2894  FALSE</span></span>
+<span id="cb14-5"><a href="#cb14-5" tabindex="-1"></a><span class="co">#&gt;      3    10     2866  FALSE</span></span>
+<span id="cb14-6"><a href="#cb14-6" tabindex="-1"></a><span class="co">#&gt;      4    11     2831  FALSE</span></span>
+<span id="cb14-7"><a href="#cb14-7" tabindex="-1"></a><span class="co">#&gt;      5    12     2797  FALSE</span></span></code></pre></div>
+</div>
+<div id="auditing-the-recommendation" class="section level2">
+<h2>Auditing the recommendation</h2>
+<p><code>recommended</code> marks the highest composite score under the
+declared weights, nothing more. The active weights and the per-scenario
+score decomposition travel with the comparison table,
+<code>near_tie</code> flags scenarios the score cannot meaningfully
+separate (tune with <code>tie_tolerance</code>), and because the size
+term is normalised within the supplied scenario set, scores are
+comparison-relative rather than absolute properties of a scenario.
+Existing scores move only when the largest retained sample in the set
+changes, which can reverse a ranking between two otherwise unchanged
+scenarios; a zero <code>size</code> weight removes the effect:</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a>cmp_audit <span class="ot">&lt;-</span> <span class="fu">weasel_compare_scenarios</span>(plan_custom)</span>
+<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a><span class="fu">attr</span>(cmp_audit, <span class="st">&quot;weights&quot;</span>)</span>
+<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a><span class="co">#&gt;  coverage endpoints      size   missing      gaps </span></span>
+<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a><span class="co">#&gt;       2.0       1.2       0.8       0.6       0.4</span></span>
+<span id="cb15-5"><a href="#cb15-5" tabindex="-1"></a><span class="fu">weasel_print_table</span>(<span class="fu">attr</span>(cmp_audit, <span class="st">&quot;score_components&quot;</span>), <span class="at">digits =</span> <span class="dv">3</span>)</span>
+<span id="cb15-6"><a href="#cb15-6" tabindex="-1"></a><span class="co">#&gt;       scenario coverage endpoints  size missing   gaps</span></span>
+<span id="cb15-7"><a href="#cb15-7" tabindex="-1"></a><span class="co">#&gt;  complete_case    2.000     1.200 0.466    0.00  0.000</span></span>
+<span id="cb15-8"><a href="#cb15-8" tabindex="-1"></a><span class="co">#&gt;     one_gap_ok    1.918     1.200 0.683   -0.15 -0.032</span></span>
+<span id="cb15-9"><a href="#cb15-9" tabindex="-1"></a><span class="co">#&gt;   very_lenient    1.863     1.059 0.800   -0.30 -0.035</span></span>
+<span id="cb15-10"><a href="#cb15-10" tabindex="-1"></a>cmp_audit[<span class="fu">c</span>(<span class="st">&quot;scenario&quot;</span>, <span class="st">&quot;score&quot;</span>, <span class="st">&quot;recommended&quot;</span>, <span class="st">&quot;near_tie&quot;</span>)]</span>
+<span id="cb15-11"><a href="#cb15-11" tabindex="-1"></a><span class="co">#&gt;        scenario    score recommended near_tie</span></span>
+<span id="cb15-12"><a href="#cb15-12" tabindex="-1"></a><span class="co">#&gt; 1 complete_case 3.666496        TRUE    FALSE</span></span>
+<span id="cb15-13"><a href="#cb15-13" tabindex="-1"></a><span class="co">#&gt; 2    one_gap_ok 3.618705       FALSE    FALSE</span></span>
+<span id="cb15-14"><a href="#cb15-14" tabindex="-1"></a><span class="co">#&gt; 3  very_lenient 3.386701       FALSE    FALSE</span></span></code></pre></div>
+</div>
+<div id="the-planning-population" class="section level2">
+<h2>The planning population</h2>
+<p>Respondents enter the planning population when they are observed at
+least once inside the span; every retention proportion is relative to
+that population, not to the full panel. Plans store and print the
+counts, and the justification text states the denominator
+explicitly:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a>plan_custom<span class="sc">$</span>population</span>
+<span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a><span class="co">#&gt; $denominator</span></span>
+<span id="cb16-3"><a href="#cb16-3" tabindex="-1"></a><span class="co">#&gt; [1] &quot;observed_in_span&quot;</span></span>
+<span id="cb16-4"><a href="#cb16-4" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb16-5"><a href="#cb16-5" tabindex="-1"></a><span class="co">#&gt; $n_rows_data</span></span>
+<span id="cb16-6"><a href="#cb16-6" tabindex="-1"></a><span class="co">#&gt; [1] 4304</span></span>
+<span id="cb16-7"><a href="#cb16-7" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb16-8"><a href="#cb16-8" tabindex="-1"></a><span class="co">#&gt; $n_ids_data</span></span>
+<span id="cb16-9"><a href="#cb16-9" tabindex="-1"></a><span class="co">#&gt; [1] 400</span></span>
+<span id="cb16-10"><a href="#cb16-10" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb16-11"><a href="#cb16-11" tabindex="-1"></a><span class="co">#&gt; $n_ids_in_span</span></span>
+<span id="cb16-12"><a href="#cb16-12" tabindex="-1"></a><span class="co">#&gt; [1] 400</span></span>
+<span id="cb16-13"><a href="#cb16-13" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb16-14"><a href="#cb16-14" tabindex="-1"></a><span class="co">#&gt; $n_pairs_in_span</span></span>
+<span id="cb16-15"><a href="#cb16-15" tabindex="-1"></a><span class="co">#&gt; [1] 2936</span></span></code></pre></div>
+</div>
+<div id="auditing-per-respondent-metrics" class="section level2">
+<h2>Auditing per-respondent metrics</h2>
+<p>The plan object exposes the per-respondent table that the scenarios
+filter on, which is useful for custom diagnostics:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a>m <span class="ot">&lt;-</span> plan_custom<span class="sc">$</span>id_metrics</span>
+<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a><span class="fu">weasel_print_table</span>(<span class="fu">head</span>(m, <span class="dv">8</span>), <span class="at">title =</span> <span class="st">&quot;Per-respondent metrics&quot;</span>)</span>
+<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a><span class="co">#&gt; ── Per-respondent metrics ──────────────────────────────────────────────────────</span></span>
+<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a><span class="co">#&gt;      id n_present n_missing prop_present has_lower has_upper n_gap max_gap</span></span>
+<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a><span class="co">#&gt;  800001         8         0        1.000      TRUE      TRUE     0       0</span></span>
+<span id="cb17-6"><a href="#cb17-6" tabindex="-1"></a><span class="co">#&gt;  800002         8         0        1.000      TRUE      TRUE     0       0</span></span>
+<span id="cb17-7"><a href="#cb17-7" tabindex="-1"></a><span class="co">#&gt;  800003         8         0        1.000      TRUE      TRUE     0       0</span></span>
+<span id="cb17-8"><a href="#cb17-8" tabindex="-1"></a><span class="co">#&gt;  800004         8         0        1.000      TRUE      TRUE     0       0</span></span>
+<span id="cb17-9"><a href="#cb17-9" tabindex="-1"></a><span class="co">#&gt;  800005         8         0        1.000      TRUE      TRUE     0       0</span></span>
+<span id="cb17-10"><a href="#cb17-10" tabindex="-1"></a><span class="co">#&gt;  800006         7         1        0.875      TRUE      TRUE     1       1</span></span>
+<span id="cb17-11"><a href="#cb17-11" tabindex="-1"></a><span class="co">#&gt;  800007         8         0        1.000      TRUE      TRUE     0       0</span></span>
+<span id="cb17-12"><a href="#cb17-12" tabindex="-1"></a><span class="co">#&gt;  800008         7         1        0.875      TRUE      TRUE     1       1</span></span>
+<span id="cb17-13"><a href="#cb17-13" tabindex="-1"></a></span>
+<span id="cb17-14"><a href="#cb17-14" tabindex="-1"></a><span class="co"># distribution of interior gap counts</span></span>
+<span id="cb17-15"><a href="#cb17-15" tabindex="-1"></a><span class="fu">table</span>(m<span class="sc">$</span>n_gap)</span>
+<span id="cb17-16"><a href="#cb17-16" tabindex="-1"></a><span class="co">#&gt; </span></span>
+<span id="cb17-17"><a href="#cb17-17" tabindex="-1"></a><span class="co">#&gt;   0   1   2 </span></span>
+<span id="cb17-18"><a href="#cb17-18" tabindex="-1"></a><span class="co">#&gt; 270 121   9</span></span></code></pre></div>
+</div>
+<div id="scope-pipeline-constraints" class="section level2">
+<h2>Scope pipeline constraints</h2>
+<p>The exploratory pipeline accepts the same structural vocabulary as
+the scenario tables. <code>min_present</code> sets the minimum number of
+observed waves a respondent needs to be kept (default 1, so exploration
+shows everyone); <code>max_missing</code>, <code>max_gap_len</code>,
+<code>n_gap_max</code>, and <code>require_endpoints</code> apply the
+same constraints a plan scenario would:</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a><span class="fu">set_weasel_scope</span>(</span>
+<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a>  long_data,</span>
+<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a>  <span class="at">id =</span> <span class="st">&quot;id&quot;</span>, <span class="at">wave =</span> <span class="st">&quot;time&quot;</span>,</span>
+<span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a>  <span class="at">lower =</span> <span class="dv">2</span>, <span class="at">upper =</span> <span class="dv">11</span>,</span>
+<span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a>  <span class="at">min_present =</span> <span class="dv">6</span>,   <span class="co"># at least 6 observed waves within the span</span></span>
+<span id="cb18-6"><a href="#cb18-6" tabindex="-1"></a>  <span class="at">max_gap_len =</span> <span class="dv">1</span>,   <span class="co"># no interior gap longer than 1 wave</span></span>
+<span id="cb18-7"><a href="#cb18-7" tabindex="-1"></a>  <span class="at">n_gap_max =</span> <span class="dv">2</span>      <span class="co"># at most 2 interior gaps</span></span>
+<span id="cb18-8"><a href="#cb18-8" tabindex="-1"></a>)</span>
+<span id="cb18-9"><a href="#cb18-9" tabindex="-1"></a><span class="co">#&gt; ✔ WEASEL scope set</span></span>
+<span id="cb18-10"><a href="#cb18-10" tabindex="-1"></a><span class="fu">evaluate_weasel_scope</span>()</span>
+<span id="cb18-11"><a href="#cb18-11" tabindex="-1"></a><span class="fu">weasel_reshape_to_wide</span>()</span>
+<span id="cb18-12"><a href="#cb18-12" tabindex="-1"></a><span class="co">#&gt; rows not used for participation: 0 with missing id, 0 with missing time, 722 outside span 2:11.</span></span>
+<span id="cb18-13"><a href="#cb18-13" tabindex="-1"></a><span class="co">#&gt; 28 respondent(s) dropped by the scope constraints; 371 kept.</span></span>
+<span id="cb18-14"><a href="#cb18-14" tabindex="-1"></a><span class="fu">weasel_summarize_waves</span>()</span>
+<span id="cb18-15"><a href="#cb18-15" tabindex="-1"></a><span class="fu">weasel_print_table</span>(<span class="fu">weasel_filter_wave_summary</span>(),</span>
+<span id="cb18-16"><a href="#cb18-16" tabindex="-1"></a>                   <span class="at">title =</span> <span class="st">&quot;Constrained patterns&quot;</span>, <span class="at">n =</span> <span class="dv">8</span>)</span>
+<span id="cb18-17"><a href="#cb18-17" tabindex="-1"></a><span class="co">#&gt; ── Constrained patterns ────────────────────────────────────────────────────────</span></span>
+<span id="cb18-18"><a href="#cb18-18" tabindex="-1"></a><span class="co">#&gt;  pattern                 waves  n ids</span></span>
+<span id="cb18-19"><a href="#cb18-19" tabindex="-1"></a><span class="co">#&gt;        1 2 3 4 5 6 7 8 9 10 11 10 179</span></span>
+<span id="cb18-20"><a href="#cb18-20" tabindex="-1"></a><span class="co">#&gt;        2 2 3 4 5 . 7 8 9 10 11  9  20</span></span>
+<span id="cb18-21"><a href="#cb18-21" tabindex="-1"></a><span class="co">#&gt;        3  2 3 4 5 6 7 8 9 10 .  9  18</span></span>
+<span id="cb18-22"><a href="#cb18-22" tabindex="-1"></a><span class="co">#&gt;        4 2 3 4 5 6 . 8 9 10 11  9  16</span></span>
+<span id="cb18-23"><a href="#cb18-23" tabindex="-1"></a><span class="co">#&gt;        5 2 3 4 5 6 7 8 . 10 11  9  16</span></span>
+<span id="cb18-24"><a href="#cb18-24" tabindex="-1"></a><span class="co">#&gt;        6  2 3 4 5 6 7 8 9 . 11  9  16</span></span>
+<span id="cb18-25"><a href="#cb18-25" tabindex="-1"></a><span class="co">#&gt;        7 2 . 4 5 6 7 8 9 10 11  9  12</span></span>
+<span id="cb18-26"><a href="#cb18-26" tabindex="-1"></a><span class="co">#&gt;        8 2 3 4 . 6 7 8 9 10 11  9  11</span></span>
+<span id="cb18-27"><a href="#cb18-27" tabindex="-1"></a><span class="fu">weasel_clear_scope</span>()</span></code></pre></div>
+</div>
+<div id="justification-styles" class="section level2">
+<h2>Justification styles</h2>
+<p><code>weasel_justify_subset()</code> writes the methods paragraph in
+three registers:</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">weasel_justify_subset</span>(plan_custom, <span class="st">&quot;one_gap_ok&quot;</span>, <span class="at">style =</span> <span class="st">&quot;concise&quot;</span>),</span>
+<span id="cb19-2"><a href="#cb19-2" tabindex="-1"></a>    <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb19-3"><a href="#cb19-3" tabindex="-1"></a><span class="co">#&gt; We selected a longitudinal analysis subset using the WEASEL framework (Wave-based Extraction and Selection for Longitudinal Data) (van den Bosch, 2026). The analysis window was selected using the core span rule: the highest total count of distinct respondent-wave pairs among contiguous windows of the same length on the wave grid; ties are resolved in favour of the earliest window. Within waves 1 to 8, we required observed endpoints to ensure temporal anchoring, allowed up to 2 missing waves within the window and restricted the missingness structure (at most 1 interior missing block(s), each no longer than 2 wave(s)). This strategy retained 334 respondent(s). The planning population comprised 400 respondent(s) observed at least once within the analysis window, out of 400 distinct respondent(s) in the supplied data; retention figures are relative to this in-window population. In the resulting subset, mean within-window coverage was 0.959; endpoint coverage was 1.000.</span></span></code></pre></div>
+<p>The in-text citation (package author and year) is derived
+automatically from the package’s own citation metadata, so the
+zero-argument call is already fully citable; supply
+<code>author</code>/<code>year</code> only to override the derived
+reference:</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">weasel_justify_subset</span>(plan_custom, <span class="st">&quot;one_gap_ok&quot;</span>), <span class="st">&quot;</span><span class="sc">\n\n</span><span class="st">&quot;</span>)</span>
+<span id="cb20-2"><a href="#cb20-2" tabindex="-1"></a><span class="co">#&gt; To construct a longitudinal analysis sample, we selected respondents whose wave participation satisfied explicit structural criteria using the WEASEL framework (Wave-based Extraction and Selection for Longitudinal Data) (van den Bosch, 2026). Specifically, we focused on waves 1 to 8 (L = 8) and required observed endpoints to ensure temporal anchoring, allowed up to 2 missing waves within the window, and restricted the missingness structure (at most 1 interior missing block(s), each no longer than 2 wave(s)). This strategy retained 334 respondent(s), reflecting an explicit trade-off between sample size and within-window completeness. The planning population comprised 400 respondent(s) observed at least once within the analysis window, out of 400 distinct respondent(s) in the supplied data; retention figures are relative to this in-window population. In the resulting subset, mean within-window coverage was 0.959, endpoint coverage was 1.000. The analysis window was selected using the core span rule: the highest total count of distinct respondent-wave pairs among contiguous windows of the same length on the wave grid; ties are resolved in favour of the earliest window. All selection decisions were rule-based and reproducible, and can be regenerated from the same inputs and parameters using the weasel workflow.</span></span>
+<span id="cb20-3"><a href="#cb20-3" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">weasel_justify_subset</span>(plan_custom, <span class="st">&quot;one_gap_ok&quot;</span>, <span class="at">style =</span> <span class="st">&quot;methods&quot;</span>,</span>
+<span id="cb20-4"><a href="#cb20-4" tabindex="-1"></a>                          <span class="at">author =</span> <span class="st">&quot;van den Bosch&quot;</span>, <span class="at">year =</span> <span class="st">&quot;2026&quot;</span>),</span>
+<span id="cb20-5"><a href="#cb20-5" tabindex="-1"></a>    <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb20-6"><a href="#cb20-6" tabindex="-1"></a><span class="co">#&gt; To construct a longitudinal analysis sample, we selected respondents whose wave participation satisfied explicit structural criteria using the WEASEL framework (Wave-based Extraction and Selection for Longitudinal Data) (van den Bosch, 2026). Specifically, we focused on waves 1 to 8 (L = 8) and required observed endpoints to ensure temporal anchoring, allowed up to 2 missing waves within the window, and restricted the missingness structure (at most 1 interior missing block(s), each no longer than 2 wave(s)). This strategy retained 334 respondent(s), reflecting an explicit trade-off between sample size and within-window completeness. The planning population comprised 400 respondent(s) observed at least once within the analysis window, out of 400 distinct respondent(s) in the supplied data; retention figures are relative to this in-window population. In the resulting subset, mean within-window coverage was 0.959, endpoint coverage was 1.000. The analysis window was selected using the core span rule: the highest total count of distinct respondent-wave pairs among contiguous windows of the same length on the wave grid; ties are resolved in favour of the earliest window. All selection decisions were rule-based and reproducible, and can be regenerated from the same inputs and parameters using the weasel workflow.</span></span></code></pre></div>
+<p>The <code>extended</code> style adds a fuller design rationale:</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">weasel_justify_subset</span>(plan_custom, <span class="st">&quot;one_gap_ok&quot;</span>, <span class="at">style =</span> <span class="st">&quot;extended&quot;</span>),</span>
+<span id="cb21-2"><a href="#cb21-2" tabindex="-1"></a>    <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span>
+<span id="cb21-3"><a href="#cb21-3" tabindex="-1"></a><span class="co">#&gt; We used the WEASEL framework (Wave-based Extraction and Selection for Longitudinal Data) (van den Bosch, 2026) to derive a reproducible longitudinal analysis subset from the available panel waves. Admissible participation patterns were defined explicitly, and the retained subset follows from those definitions and the supplied data. We defined a target window of waves 1 to 8 (L = 8) and applied structural constraints to respondent trajectories. Within this window, we required observed endpoints to ensure temporal anchoring, allowed up to 2 missing waves within the window, and restricted the missingness structure (at most 1 interior missing block(s), each no longer than 2 wave(s)). Under these criteria, 334 respondent(s) were retained. The planning population comprised 400 respondent(s) observed at least once within the analysis window, out of 400 distinct respondent(s) in the supplied data; retention figures are relative to this in-window population. Subset diagnostics indicated that mean within-window coverage was 0.959 and endpoint coverage was 1.000. The analysis window was selected using the core span rule: the highest total count of distinct respondent-wave pairs among contiguous windows of the same length on the wave grid; ties are resolved in favour of the earliest window. The inclusion set is fully determined by the declared constraints (window bounds, endpoint handling, and permitted missingness structure) and the supplied data, and can be regenerated from them.</span></span></code></pre></div>
+</div>
+<div id="quiet-mode-and-reproducibility" class="section level2">
+<h2>Quiet mode and reproducibility</h2>
+<p>All status messages respect a single option:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" tabindex="-1"></a><span class="fu">options</span>(<span class="at">weasel.verbose =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb22-2"><a href="#cb22-2" tabindex="-1"></a>p_quiet <span class="ot">&lt;-</span> <span class="fu">weasel_plan</span>(long_data, <span class="st">&quot;id&quot;</span>, <span class="st">&quot;time&quot;</span>, <span class="at">span =</span> <span class="st">&quot;full&quot;</span>)</span>
+<span id="cb22-3"><a href="#cb22-3" tabindex="-1"></a><span class="fu">options</span>(<span class="at">weasel.verbose =</span> <span class="cn">TRUE</span>)</span></code></pre></div>
+<p>The data generator runs synthetic draws in a separate R process,
+while console colours rotate using package-private state without random
+draws. Neither writes to the caller’s global workspace. The caller’s
+random-number stream, RNG configuration and cached Box-Muller normal
+deviate remain untouched. Explicit seeds reproduce the same panels as
+before. Without a seed, each generation process draws and reports its
+own seed; repeated calls can produce different panels. Each call incurs
+R process startup time, and temporary files are removed on exit,
+including errors.</p>
+<p>You can also use <code>suppressMessages()</code> for the logo, scope
+report and full demonstration. Quiet mode suppresses explicit table
+display too, while retaining its formatted return value. For example,
+generation leaves your analysis stream unchanged:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">99</span>)</span>
+<span id="cb23-2"><a href="#cb23-2" tabindex="-1"></a>before <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(<span class="dv">2</span>)</span>
+<span id="cb23-3"><a href="#cb23-3" tabindex="-1"></a></span>
+<span id="cb23-4"><a href="#cb23-4" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">99</span>)</span>
+<span id="cb23-5"><a href="#cb23-5" tabindex="-1"></a>tmp <span class="ot">&lt;-</span> <span class="fu">generate_weasel_dummy_data</span>(<span class="at">n_ids =</span> <span class="dv">20</span>, <span class="at">n_times =</span> <span class="dv">5</span>, <span class="at">seed =</span> <span class="dv">1</span>)</span>
+<span id="cb23-6"><a href="#cb23-6" tabindex="-1"></a><span class="co">#&gt; seed: 1</span></span>
+<span id="cb23-7"><a href="#cb23-7" tabindex="-1"></a>after <span class="ot">&lt;-</span> <span class="fu">rnorm</span>(<span class="dv">2</span>)</span>
+<span id="cb23-8"><a href="#cb23-8" tabindex="-1"></a></span>
+<span id="cb23-9"><a href="#cb23-9" tabindex="-1"></a><span class="fu">identical</span>(before, after)</span>
+<span id="cb23-10"><a href="#cb23-10" tabindex="-1"></a><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>
